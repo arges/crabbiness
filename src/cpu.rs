@@ -240,6 +240,31 @@ impl Cpu {
                 self.p = self.bus.read_u8(STACK_BYTE_HIGH | self.sp as u16);
             }
 
+            Opcode::Tax => {
+                self.x = self.a;
+                self.set_flags(self.x);
+            }
+            Opcode::Tay => {
+                self.y = self.a;
+                self.set_flags(self.y);
+            }
+            Opcode::Tsx => {
+                self.x = self.sp;
+                self.set_flags(self.x);
+            }
+            Opcode::Txa => {
+                self.a = self.x;
+                self.set_flags(self.a);
+            }
+            Opcode::Txs => {
+                self.sp = self.x;
+                self.set_flags(self.sp);
+            }
+            Opcode::Tya => {
+                self.a = self.y;
+                self.set_flags(self.a);
+            }
+
             Opcode::Jmp(mode) => {
                 self.pc = self.get_operand(mode);
             }
@@ -410,6 +435,14 @@ impl Cpu {
             0x68 => (Opcode::Pla, 3),
             0x28 => (Opcode::Plp, 3),
 
+            // Transfers
+            0xaa => (Opcode::Tax, 2),
+            0xa8 => (Opcode::Tay, 2),
+            0xba => (Opcode::Tsx, 2),
+            0x8a => (Opcode::Txa, 2),
+            0x9a => (Opcode::Txs, 2),
+            0x98 => (Opcode::Tya, 2),
+
             0x20 => (Opcode::Jsr(AddressingMode::Absolute), 6),
             _ => (Opcode::Nop, 1),
         }
@@ -526,7 +559,6 @@ mod tests {
         assert_eq!(cpu.pc, ex_pc);
     }
 
-    #[rstest]
     fn test_push_pull() {
         let mut cpu = setup_cpu(test_program(vec![0x48, 0x68, 0x08, 0x28]));
         cpu.reset();
@@ -542,6 +574,48 @@ mod tests {
         cpu.step();
         assert_eq!(cpu.a, 0x12);
         assert_eq!(cpu.sp, 0xff);
+        cpu.p = 0b1010_0101;
+        cpu.step();
+        assert_eq!(cpu.sp, 0xfe);
+        assert_eq!(
+            cpu.bus.read_u8(0x0100 | cpu.sp.wrapping_add(1) as u16),
+            0b1010_0101
+        );
+        cpu.p = 0x00;
+        cpu.step();
+        assert_eq!(cpu.p, 0b1010_0101);
+        assert_eq!(cpu.sp, 0xff);
+    }
+
+    #[rstest]
+    #[case(vec![0xaa], 0xfa, 0, 0, 0, 0xfa, 0xfa, 0, 0)]
+    #[case(vec![0xa8], 0xfa, 0, 0, 0, 0xfa, 0, 0xfa, 0)]
+    #[case(vec![0xba], 0, 0, 0, 0xba, 0, 0xba, 0, 0xba)]
+    #[case(vec![0x8a], 0, 0x8a, 0, 0, 0x8a, 0x8a, 0, 0)]
+    #[case(vec![0x9a], 0, 0x9a, 0, 0, 0, 0x9a, 0, 0x9a)]
+    #[case(vec![0x98], 0, 0, 0x98, 0, 0x98, 0, 0x98, 0)]
+    fn test_transfers(
+        #[case] in_prg: Vec<u8>,
+        #[case] in_a: u8,
+        #[case] in_x: u8,
+        #[case] in_y: u8,
+        #[case] in_sp: u8,
+        #[case] ex_a: u8,
+        #[case] ex_x: u8,
+        #[case] ex_y: u8,
+        #[case] ex_sp: u8,
+    ) {
+        let mut cpu = setup_cpu(test_program(in_prg));
+        cpu.reset();
+        cpu.a = in_a;
+        cpu.x = in_x;
+        cpu.y = in_y;
+        cpu.sp = in_sp;
+        cpu.step();
+        assert_eq!(cpu.a, ex_a);
+        assert_eq!(cpu.x, ex_x);
+        assert_eq!(cpu.y, ex_y);
+        assert_eq!(cpu.sp, ex_sp);
     }
 
     // TODO add more tests
