@@ -1,0 +1,8 @@
+[package]
+name = "crabbiness"
+version = "0.1.0"
+authors = ["Chris J Arges <christopherarges@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+rstest = "0.12.0"
