@@ -2,6 +2,8 @@
 #![allow(unused_variables)]
 #![allow(dead_code)]
 
+extern crate core;
+
 use std::fs;
 use std::io::Read;
 
