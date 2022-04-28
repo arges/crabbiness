@@ -10,7 +10,6 @@ use crate::cpu::AddressingMode::{
     Absolute, AbsoluteX, AbsoluteY, Accumulator, Immediate, IndirectX, IndirectY, ZeroPage,
     ZeroPageX, ZeroPageY,
 };
-use crate::cpu::Flag::Overflow;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Add;
 
@@ -83,7 +82,7 @@ enum Opcode {
     Inx,
     Iny,
     Jmp(AddressingMode),
-    Jsr(AddressingMode),
+    Jsr,
     Lda,
     Ldx,
     Ldy,
@@ -171,15 +170,27 @@ impl Cpu {
         }
     }
 
-    fn stack_push(&mut self, value: u8)  {
+    fn compare(&mut self, mode: AddressingMode, reg: u8) {
+        let op = (self.get_operand(mode) & 0xff) as u8;
+        let result = reg.wrapping_sub(op);
+        self.change_flag(Flag::Carry, reg >= op);
+        self.set_zero_negative_flags(result);
+    }
+
+    fn stack_push_u8(&mut self, value: u8) {
         self.bus.write_u8(STACK_BYTE_HIGH | self.sp as u16, value);
         self.sp = self.sp.wrapping_sub(1);
     }
 
-   fn stack_pop(&mut self) -> u8 {
-       self.sp = self.sp.wrapping_add(1);
-       self.bus.read_u8(STACK_BYTE_HIGH | self.sp as u16)
-   }
+    fn stack_push_u16(&mut self, value: u16) {
+        self.stack_push_u8((value & 0xff) as u8);
+        self.stack_push_u8(((value & 0xff00) >> 8) as u8);
+    }
+
+    fn stack_pop(&mut self) -> u8 {
+        self.sp = self.sp.wrapping_add(1);
+        self.bus.read_u8(STACK_BYTE_HIGH | self.sp as u16)
+    }
 
     fn execute(&mut self, opcode: Opcode) {
         match opcode {
@@ -189,9 +200,9 @@ impl Cpu {
             Opcode::Adc(mode) => {
                 let carry: u8 = if self.is_flag_set(Flag::Carry) { 1 } else { 0 };
                 let operand = self.get_operand(mode) as u8;
-                let result = self.a.wrapping_add(operand + carry);
+                let result = self.a.wrapping_add(operand.wrapping_add(carry));
                 self.change_flag(
-                    Overflow,
+                    Flag::Overflow,
                     (operand ^ result) & (self.a ^ result) & 0x80 != 0,
                 );
                 self.a = result;
@@ -219,10 +230,10 @@ impl Cpu {
                 self.branch(self.is_flag_set(Flag::Carry));
             }
             Opcode::Bvc => {
-                self.branch(self.is_flag_clear(Overflow));
+                self.branch(self.is_flag_clear(Flag::Overflow));
             }
             Opcode::Bvs => {
-                self.branch(self.is_flag_set(Overflow));
+                self.branch(self.is_flag_set(Flag::Overflow));
             }
             Opcode::Bne => {
                 self.branch(self.is_flag_clear(Flag::Zero));
@@ -249,7 +260,7 @@ impl Cpu {
                 self.set_flag(Flag::IntDisable);
             }
             Opcode::Clv => {
-                self.clear_flag(Overflow);
+                self.clear_flag(Flag::Overflow);
             }
             Opcode::Cld => {
                 self.clear_flag(Flag::Decimal);
@@ -257,21 +268,58 @@ impl Cpu {
             Opcode::Sed => {
                 self.set_flag(Flag::Decimal);
             }
+            Opcode::Inc(mode) => {
+                let addr = self.get_operand_address(mode);
+                let value = self.bus.read_u8(addr).wrapping_add(1);
+                self.bus.write_u8(addr, value);
+            }
+            Opcode::Inx => {
+                self.x = self.x.wrapping_add(1);
+                self.set_zero_negative_flags(self.x);
+            }
+            Opcode::Iny => {
+                self.y = self.y.wrapping_add(1);
+                self.set_zero_negative_flags(self.y);
+            }
             Opcode::Bit(mode) => {
                 let result = self.a & self.get_operand(mode) as u8;
                 self.set_zero_negative_flags(result);
-                self.change_flag(Overflow, result & 0x40 != 0);
+                self.change_flag(Flag::Overflow, result & 0x40 != 0);
                 // TODO write tests
             }
-           Opcode::Brk => {
-               self.stack_push((self.pc & 0xff) as u8);
-               self.stack_push(((self.pc & 0xff00) >> 8) as u8);
-               self.stack_push(self.p);
-               self.set_flag(Flag::IntDisable);
-               self.pc = 0xffff;
-               // TODO write tests
-           }
-
+            Opcode::Brk => {
+                self.pc = self.pc.wrapping_add(1);
+                self.set_flag(Flag::IntDisable);
+                self.stack_push_u16(self.pc);
+                self.stack_push_u8(self.p);
+                self.pc = self.bus.read_u16(0xfffe);
+                // TODO write tests
+            }
+            Opcode::Jsr => {
+                let tgt_addr = self.get_operand_address(Absolute);
+                let ret_addr = self.pc - 1;
+                self.stack_push_u16(ret_addr);
+                self.pc = tgt_addr;
+                // TODO write tests
+            }
+            Opcode::Cmp(mode) => {
+                self.compare(mode, self.a);
+                // TODO write tests
+            }
+            Opcode::Cpx(mode) => {
+                self.compare(mode, self.x);
+                // TODO write tests
+            }
+            Opcode::Cpy(mode) => {
+                self.compare(mode, self.y);
+                // TODO write tests
+            }
+            Opcode::Dec(mode) => {
+                let addr = self.get_operand_address(mode);
+                let value = self.bus.read_u8(addr).wrapping_sub(1);
+                self.bus.write_u8(addr, value);
+                // TODO write tests
+            }
             Opcode::Dex => {
                 self.x = self.x.wrapping_sub(1);
                 self.set_zero_negative_flags(self.x);
@@ -289,10 +337,10 @@ impl Cpu {
                 self.set_zero_negative_flags(self.a);
             }
             Opcode::Pha => {
-                self.stack_push(self.a);
+                self.stack_push_u8(self.a);
             }
             Opcode::Php => {
-                self.stack_push(self.p);
+                self.stack_push_u8(self.p);
             }
             Opcode::Pla => {
                 self.a = self.stack_pop();
@@ -339,9 +387,9 @@ impl Cpu {
                     0
                 };
                 let operand = self.get_operand(mode) as u8;
-                let result = self.a.wrapping_sub(operand + carry);
+                let result = self.a.wrapping_sub(operand.wrapping_add(carry));
                 self.change_flag(
-                    Overflow,
+                    Flag::Overflow,
                     (operand ^ result) & (self.a ^ result) & 0x80 != 0,
                 );
                 self.a = result;
@@ -387,12 +435,8 @@ impl Cpu {
         match mode {
             Immediate => self.pc,
             ZeroPage => 0x0000 + self.bus.read_u8(self.pc) as u16,
-            ZeroPageX => {
-                0x0000 + self.bus.read_u8(self.pc).wrapping_add(self.x) as u16
-            }
-            ZeroPageY => {
-                0x0000 + self.bus.read_u8(self.pc).wrapping_add(self.y) as u16
-            }
+            ZeroPageX => 0x0000 + self.bus.read_u8(self.pc).wrapping_add(self.x) as u16,
+            ZeroPageY => 0x0000 + self.bus.read_u8(self.pc).wrapping_add(self.y) as u16,
             Absolute => self.pc,
             AbsoluteX => self.pc.wrapping_add(self.x as u16),
             AbsoluteY => self.pc.wrapping_add(self.y as u16),
@@ -411,9 +455,9 @@ impl Cpu {
             AddressingMode::Relative => {
                 let offset = self.bus.read_u8(self.pc) as i8;
                 if offset > 0 {
-                    self.pc + (offset as u16)
+                    self.pc.wrapping_add(offset as u16)
                 } else {
-                    self.pc - (offset as u16)
+                    self.pc.wrapping_sub(offset as u16)
                 }
             }
             Accumulator => self.a as u16,
@@ -576,12 +620,12 @@ impl Cpu {
             0x9a => (Opcode::Txs, 2),
             0x98 => (Opcode::Tya, 2),
 
-            0x20 => (Opcode::Jsr(Absolute), 6),
+            0x20 => (Opcode::Jsr, 6),
             _ => (Opcode::Nop, 1),
         }
     }
 
-    fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.a = 0;
         self.x = 0;
         self.p = 0;
@@ -593,16 +637,23 @@ impl Cpu {
         let instruction = self.bus.read_u8(self.pc);
         let (opcode, cycles) = self.decode(instruction);
         self.pc = self.pc.wrapping_add(1);
-        println!(
-            "{:02x} {}",
-            instruction,
-            opcode.to_string().to_ascii_uppercase()
-        );
-        self.execute(opcode);
-        println!("{}", self)
+
+        // TODO Fix output
+        match opcode {
+            Opcode::Nop => {}
+            _ => {
+                println!(
+                    "{:02x} {}",
+                    instruction,
+                    opcode.to_string().to_ascii_uppercase()
+                );
+                self.execute(opcode);
+                println!("{}", self)
+            }
+        }
     }
 
-    fn run(&mut self) {
+    pub fn run(&mut self) {
         loop {
             self.step();
         }
@@ -751,11 +802,10 @@ mod tests {
         assert_eq!(cpu.sp, ex_sp);
     }
 
-
     #[rstest]
     #[case(vec![0xca], 0xff, 0, 0xfe, 0, 0b10000000)]
     #[case(vec![0x88], 0xa0, 0x05, 0xa0, 0x04, 0b00000000)]
-    fn test_decs (
+    fn test_decs(
         #[case] in_prg: Vec<u8>,
         #[case] in_x: u8,
         #[case] in_y: u8,

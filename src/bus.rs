@@ -18,25 +18,28 @@ impl Bus {
     }
 
     pub fn read_u8(&self, address: u16) -> u8 {
-        println!("reading {:04x}", address);
+        //println!("reading {:04x}", address);
         match address {
             0x0000..=0x1fff => self.ram[address as usize % 0x0800],
+            0x2000..=0x401f => {
+                println!("reading {:04x} not implemented", address);
+                0
+            }
             0x4020..=0xffff => match &self.rom {
                 Some(r) => {
-                    let output = r.read_byte((address - 0x4020).into());
-                    println!("got {:02x}", output);
+                    let output = r.read_byte(address);
+                    // println!("got {:02x}", output);
                     output
                 }
                 None => 0,
             },
-            _ => 0,
         }
     }
 
     pub fn write_u8(&mut self, address: u16, data: u8) {
         match address {
             0x0000..=0x1fff => {
-                println!("writing {:02x} into {:04x}", data, address);
+                //println!("writing {:02x} into {:04x}", data, address);
                 self.ram[address as usize % 0x0800] = data
             }
             _ => (),

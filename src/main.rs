@@ -21,5 +21,8 @@ fn main() {
     // setup bus, cpu
     let mut bus = bus::Bus::new();
     bus.load(r);
-    let cpu = cpu::Cpu::new(bus);
+    let mut cpu = cpu::Cpu::new(bus);
+
+    cpu.reset();
+    cpu.run();
 }

@@ -58,7 +58,9 @@ impl Rom {
             chr_rom: vec![],
         }
     }
-    pub fn read_byte(&self, address: usize) -> u8 {
-        self.prg_rom[address]
+    pub fn read_byte(&self, address: u16) -> u8 {
+        // This only implements mapper0
+        // TODO: implement other mappers
+        self.prg_rom[((address - 0x8000) % 0x4000) as usize]
     }
 }
