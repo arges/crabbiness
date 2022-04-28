@@ -2,7 +2,7 @@
 #![allow(unused_variables)]
 #![allow(dead_code)]
 
-//https://www.masswerk.at/6502/6502_instruction_set.html
+// https://www.masswerk.at/6502/6502_instruction_set.html
 // http://www.6502.org/tutorials/6502opcodes.html
 
 use crate::bus::Bus;
@@ -10,6 +10,7 @@ use crate::cpu::AddressingMode::{
     Absolute, AbsoluteX, AbsoluteY, Accumulator, Immediate, IndirectX, IndirectY, ZeroPage,
     ZeroPageX, ZeroPageY,
 };
+use crate::cpu::Flag::Overflow;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Add;
 
@@ -164,14 +165,25 @@ impl Cpu {
         self.p & flag as u8 == 0
     }
 
-    fn branch(&mut self) {
-        self.pc = self.get_operand(AddressingMode::Relative);
+    fn branch(&mut self, condition: bool) {
+        if condition {
+            self.pc = self.get_operand(AddressingMode::Relative);
+        }
     }
+
+    fn stack_push(&mut self, value: u8)  {
+        self.bus.write_u8(STACK_BYTE_HIGH | self.sp as u16, value);
+        self.sp = self.sp.wrapping_sub(1);
+    }
+
+   fn stack_pop(&mut self) -> u8 {
+       self.sp = self.sp.wrapping_add(1);
+       self.bus.read_u8(STACK_BYTE_HIGH | self.sp as u16)
+   }
 
     fn execute(&mut self, opcode: Opcode) {
         match opcode {
             Opcode::Nop => {}
-            Opcode::Brk => {}
 
             // http://www.righto.com/2012/12/the-6502-overflow-flag-explained.html
             Opcode::Adc(mode) => {
@@ -179,7 +191,7 @@ impl Cpu {
                 let operand = self.get_operand(mode) as u8;
                 let result = self.a.wrapping_add(operand + carry);
                 self.change_flag(
-                    Flag::Overflow,
+                    Overflow,
                     (operand ^ result) & (self.a ^ result) & 0x80 != 0,
                 );
                 self.a = result;
@@ -190,50 +202,40 @@ impl Cpu {
                 self.a = self.a & (self.get_operand(mode) as u8);
                 self.set_zero_negative_flags(self.a)
             }
-            Opcode::Asl(mode) => {}
-            Opcode::Jsr(mode) => {}
-            Opcode::Bit(mode) => {}
-            Opcode::Bcc => {
-                if (self.p & Flag::Carry as u8) == 0 {
-                    self.branch();
+            Opcode::Asl(mode) => {
+                let op = self.get_operand(mode);
+                self.a = op.rotate_left(1) as u8 & 0xfe;
+                if op & 0x80 != 0 {
+                    self.set_flag(Flag::Carry);
+                } else {
+                    self.clear_flag(Flag::Carry);
                 }
+                self.set_zero_negative_flags(self.a);
+            }
+            Opcode::Bcc => {
+                self.branch(self.is_flag_clear(Flag::Carry));
             }
             Opcode::Bcs => {
-                if (self.p & Flag::Carry as u8) != 0 {
-                    self.branch();
-                }
+                self.branch(self.is_flag_set(Flag::Carry));
             }
             Opcode::Bvc => {
-                if (self.p & Flag::Overflow as u8) == 0 {
-                    self.branch();
-                }
+                self.branch(self.is_flag_clear(Overflow));
             }
             Opcode::Bvs => {
-                if (self.p & Flag::Overflow as u8) != 0 {
-                    self.branch();
-                }
+                self.branch(self.is_flag_set(Overflow));
             }
             Opcode::Bne => {
-                if (self.p & Flag::Zero as u8) == 0 {
-                    self.branch();
-                }
+                self.branch(self.is_flag_clear(Flag::Zero));
             }
             Opcode::Beq => {
-                if (self.p & Flag::Zero as u8) != 0 {
-                    self.branch();
-                }
+                self.branch(self.is_flag_set(Flag::Zero));
             }
             Opcode::Bpl => {
-                if (self.p & Flag::Negative as u8) == 0 {
-                    self.branch();
-                }
+                self.branch(self.is_flag_clear(Flag::Negative));
             }
             Opcode::Bmi => {
-                if (self.p & Flag::Negative as u8) != 0 {
-                    self.branch();
-                }
+                self.branch(self.is_flag_set(Flag::Negative));
             }
-
             Opcode::Clc => {
                 self.clear_flag(Flag::Carry);
             }
@@ -247,13 +249,36 @@ impl Cpu {
                 self.set_flag(Flag::IntDisable);
             }
             Opcode::Clv => {
-                self.clear_flag(Flag::Overflow);
+                self.clear_flag(Overflow);
             }
             Opcode::Cld => {
                 self.clear_flag(Flag::Decimal);
             }
             Opcode::Sed => {
                 self.set_flag(Flag::Decimal);
+            }
+            Opcode::Bit(mode) => {
+                let result = self.a & self.get_operand(mode) as u8;
+                self.set_zero_negative_flags(result);
+                self.change_flag(Overflow, result & 0x40 != 0);
+                // TODO write tests
+            }
+           Opcode::Brk => {
+               self.stack_push((self.pc & 0xff) as u8);
+               self.stack_push(((self.pc & 0xff00) >> 8) as u8);
+               self.stack_push(self.p);
+               self.set_flag(Flag::IntDisable);
+               self.pc = 0xffff;
+               // TODO write tests
+           }
+
+            Opcode::Dex => {
+                self.x = self.x.wrapping_sub(1);
+                self.set_zero_negative_flags(self.x);
+            }
+            Opcode::Dey => {
+                self.y = self.y.wrapping_sub(1);
+                self.set_zero_negative_flags(self.y);
             }
             Opcode::Eor(mode) => {
                 self.a = self.a ^ (self.get_operand(mode) as u8);
@@ -264,21 +289,17 @@ impl Cpu {
                 self.set_zero_negative_flags(self.a);
             }
             Opcode::Pha => {
-                self.bus.write_u8(STACK_BYTE_HIGH | self.sp as u16, self.a);
-                self.sp = self.sp.wrapping_sub(1);
+                self.stack_push(self.a);
             }
             Opcode::Php => {
-                self.bus.write_u8(STACK_BYTE_HIGH | self.sp as u16, self.p);
-                self.sp = self.sp.wrapping_sub(1);
+                self.stack_push(self.p);
             }
             Opcode::Pla => {
-                self.sp = self.sp.wrapping_add(1);
-                self.a = self.bus.read_u8(STACK_BYTE_HIGH | self.sp as u16);
+                self.a = self.stack_pop();
                 self.set_zero_negative_flags(self.a);
             }
             Opcode::Plp => {
-                self.sp = self.sp.wrapping_add(1);
-                self.p = self.bus.read_u8(STACK_BYTE_HIGH | self.sp as u16);
+                self.p = self.stack_pop();
             }
             Opcode::Rol(mode) => {
                 let carry_in = if self.p & (Flag::Carry as u8) != 0 {
@@ -320,7 +341,7 @@ impl Cpu {
                 let operand = self.get_operand(mode) as u8;
                 let result = self.a.wrapping_sub(operand + carry);
                 self.change_flag(
-                    Flag::Overflow,
+                    Overflow,
                     (operand ^ result) & (self.a ^ result) & 0x80 != 0,
                 );
                 self.a = result;
@@ -364,21 +385,21 @@ impl Cpu {
     /// Returns the address of the operand given the addressing mode. Some mods such as Immediate and Accumulator will return 0 as an invalid state
     fn get_operand_address(&self, mode: AddressingMode) -> u16 {
         match mode {
-            AddressingMode::Immediate => self.pc,
-            AddressingMode::ZeroPage => 0x0000 + self.bus.read_u8(self.pc) as u16,
-            AddressingMode::ZeroPageX => {
+            Immediate => self.pc,
+            ZeroPage => 0x0000 + self.bus.read_u8(self.pc) as u16,
+            ZeroPageX => {
                 0x0000 + self.bus.read_u8(self.pc).wrapping_add(self.x) as u16
             }
-            AddressingMode::ZeroPageY => {
+            ZeroPageY => {
                 0x0000 + self.bus.read_u8(self.pc).wrapping_add(self.y) as u16
             }
-            AddressingMode::Absolute => self.pc,
-            AddressingMode::AbsoluteX => self.pc.wrapping_add(self.x as u16),
-            AddressingMode::AbsoluteY => self.pc.wrapping_add(self.y as u16),
+            Absolute => self.pc,
+            AbsoluteX => self.pc.wrapping_add(self.x as u16),
+            AbsoluteY => self.pc.wrapping_add(self.y as u16),
 
             AddressingMode::Indirect => self.bus.read_u16(self.pc),
-            AddressingMode::IndirectX => self.bus.read_u16(self.pc).wrapping_add(self.x as u16),
-            AddressingMode::IndirectY => self.bus.read_u16(self.pc).wrapping_add(self.y as u16),
+            IndirectX => self.bus.read_u16(self.pc).wrapping_add(self.x as u16),
+            IndirectY => self.bus.read_u16(self.pc).wrapping_add(self.y as u16),
             _ => 0,
         }
     }
@@ -395,7 +416,7 @@ impl Cpu {
                     self.pc - (offset as u16)
                 }
             }
-            AddressingMode::Accumulator => self.a as u16,
+            Accumulator => self.a as u16,
             _ => self.bus.read_u16(self.get_operand_address(mode)),
         }
     }
@@ -405,31 +426,31 @@ impl Cpu {
     fn decode(&self, opcode: u8) -> (Opcode, u8) {
         match opcode {
             // ADC (Add Memory to Accumulator with Carry)
-            0x69 => (Opcode::Adc(AddressingMode::Immediate), 2),
-            0x65 => (Opcode::Adc(AddressingMode::ZeroPage), 3),
-            0x75 => (Opcode::Adc(AddressingMode::ZeroPageX), 4),
-            0x6d => (Opcode::Adc(AddressingMode::Absolute), 4),
-            0x7d => (Opcode::Adc(AddressingMode::AbsoluteX), 4),
-            0x79 => (Opcode::Adc(AddressingMode::AbsoluteY), 4),
-            0x61 => (Opcode::Adc(AddressingMode::IndirectX), 6),
-            0x71 => (Opcode::Adc(AddressingMode::IndirectY), 5),
+            0x69 => (Opcode::Adc(Immediate), 2),
+            0x65 => (Opcode::Adc(ZeroPage), 3),
+            0x75 => (Opcode::Adc(ZeroPageX), 4),
+            0x6d => (Opcode::Adc(Absolute), 4),
+            0x7d => (Opcode::Adc(AbsoluteX), 4),
+            0x79 => (Opcode::Adc(AbsoluteY), 4),
+            0x61 => (Opcode::Adc(IndirectX), 6),
+            0x71 => (Opcode::Adc(IndirectY), 5),
 
             // AND (bitwise AND with accumulator)
-            0x29 => (Opcode::And(AddressingMode::Immediate), 2),
-            0x25 => (Opcode::And(AddressingMode::ZeroPage), 3),
-            0x35 => (Opcode::And(AddressingMode::ZeroPageX), 4),
-            0x2d => (Opcode::And(AddressingMode::Absolute), 4),
-            0x3d => (Opcode::And(AddressingMode::AbsoluteX), 4),
-            0x39 => (Opcode::And(AddressingMode::AbsoluteY), 4),
-            0x21 => (Opcode::And(AddressingMode::IndirectX), 6),
-            0x31 => (Opcode::And(AddressingMode::IndirectY), 5),
+            0x29 => (Opcode::And(Immediate), 2),
+            0x25 => (Opcode::And(ZeroPage), 3),
+            0x35 => (Opcode::And(ZeroPageX), 4),
+            0x2d => (Opcode::And(Absolute), 4),
+            0x3d => (Opcode::And(AbsoluteX), 4),
+            0x39 => (Opcode::And(AbsoluteY), 4),
+            0x21 => (Opcode::And(IndirectX), 6),
+            0x31 => (Opcode::And(IndirectY), 5),
 
             // ASL (Arithmetic Shift Left)
-            0x0a => (Opcode::Asl(AddressingMode::Accumulator), 2),
-            0x06 => (Opcode::Asl(AddressingMode::ZeroPage), 5),
-            0x16 => (Opcode::Asl(AddressingMode::ZeroPageX), 6),
-            0x0e => (Opcode::Asl(AddressingMode::Absolute), 2),
-            0x1e => (Opcode::Asl(AddressingMode::AbsoluteX), 4),
+            0x0a => (Opcode::Asl(Accumulator), 2),
+            0x06 => (Opcode::Asl(ZeroPage), 5),
+            0x16 => (Opcode::Asl(ZeroPageX), 6),
+            0x0e => (Opcode::Asl(Absolute), 2),
+            0x1e => (Opcode::Asl(AbsoluteX), 4),
 
             // Branch instructions
             0x90 => (Opcode::Bcc, 2),
@@ -440,8 +461,8 @@ impl Cpu {
             0x10 => (Opcode::Bpl, 2),
 
             // BIT (test BITs in Memory With Accumulator)
-            0x24 => (Opcode::Bit(AddressingMode::ZeroPage), 3),
-            0x2c => (Opcode::Bit(AddressingMode::Absolute), 4),
+            0x24 => (Opcode::Bit(ZeroPage), 3),
+            0x2c => (Opcode::Bit(Absolute), 4),
 
             // BRK (Force break)
             0x00 => (Opcode::Brk, 7),
@@ -456,30 +477,30 @@ impl Cpu {
             0xf8 => (Opcode::Sed, 2),
 
             // CMP (Compare Memory with Accumulator)
-            0xc9 => (Opcode::Cmp(AddressingMode::Immediate), 2),
-            0xc5 => (Opcode::Cmp(AddressingMode::ZeroPage), 3),
-            0xd5 => (Opcode::Cmp(AddressingMode::ZeroPageX), 4),
-            0xcd => (Opcode::Cmp(AddressingMode::Absolute), 4),
-            0xdd => (Opcode::Cmp(AddressingMode::AbsoluteX), 4),
-            0xd9 => (Opcode::Cmp(AddressingMode::AbsoluteY), 4),
-            0xc1 => (Opcode::Cmp(AddressingMode::IndirectX), 6),
-            0xd1 => (Opcode::Cmp(AddressingMode::IndirectY), 5),
+            0xc9 => (Opcode::Cmp(Immediate), 2),
+            0xc5 => (Opcode::Cmp(ZeroPage), 3),
+            0xd5 => (Opcode::Cmp(ZeroPageX), 4),
+            0xcd => (Opcode::Cmp(Absolute), 4),
+            0xdd => (Opcode::Cmp(AbsoluteX), 4),
+            0xd9 => (Opcode::Cmp(AbsoluteY), 4),
+            0xc1 => (Opcode::Cmp(IndirectX), 6),
+            0xd1 => (Opcode::Cmp(IndirectY), 5),
 
             // CPX (Compare Memory and Index X)
-            0xe0 => (Opcode::Cpx(AddressingMode::Immediate), 2),
-            0xe4 => (Opcode::Cpx(AddressingMode::ZeroPage), 3),
-            0xec => (Opcode::Cpx(AddressingMode::Absolute), 4),
+            0xe0 => (Opcode::Cpx(Immediate), 2),
+            0xe4 => (Opcode::Cpx(ZeroPage), 3),
+            0xec => (Opcode::Cpx(Absolute), 4),
 
             // CPY (Compare Memory and Index Y)
-            0xc0 => (Opcode::Cpy(AddressingMode::Immediate), 2),
-            0xc4 => (Opcode::Cpy(AddressingMode::ZeroPage), 3),
-            0xcc => (Opcode::Cpy(AddressingMode::Absolute), 4),
+            0xc0 => (Opcode::Cpy(Immediate), 2),
+            0xc4 => (Opcode::Cpy(ZeroPage), 3),
+            0xcc => (Opcode::Cpy(Absolute), 4),
 
             // DEC (Decrement Memory by One)
-            0xc6 => (Opcode::Dec(AddressingMode::ZeroPage), 5),
-            0xd6 => (Opcode::Dec(AddressingMode::ZeroPageX), 6),
-            0xce => (Opcode::Dec(AddressingMode::Absolute), 6),
-            0xde => (Opcode::Dec(AddressingMode::AbsoluteX), 7),
+            0xc6 => (Opcode::Dec(ZeroPage), 5),
+            0xd6 => (Opcode::Dec(ZeroPageX), 6),
+            0xce => (Opcode::Dec(Absolute), 6),
+            0xde => (Opcode::Dec(AbsoluteX), 7),
 
             // DEX (Decrement Index X by One)
             0xca => (Opcode::Dex, 2),
@@ -488,36 +509,36 @@ impl Cpu {
             0x88 => (Opcode::Dey, 2),
 
             // EOR (EOR Memory with Accumulator)
-            0x49 => (Opcode::Eor(AddressingMode::Immediate), 2),
-            0x45 => (Opcode::Eor(AddressingMode::ZeroPage), 3),
-            0x55 => (Opcode::Eor(AddressingMode::ZeroPageX), 4),
-            0x4d => (Opcode::Eor(AddressingMode::Absolute), 4),
-            0x5d => (Opcode::Eor(AddressingMode::AbsoluteX), 4),
-            0x59 => (Opcode::Eor(AddressingMode::AbsoluteY), 4),
-            0x41 => (Opcode::Eor(AddressingMode::IndirectX), 6),
-            0x51 => (Opcode::Eor(AddressingMode::IndirectY), 5),
+            0x49 => (Opcode::Eor(Immediate), 2),
+            0x45 => (Opcode::Eor(ZeroPage), 3),
+            0x55 => (Opcode::Eor(ZeroPageX), 4),
+            0x4d => (Opcode::Eor(Absolute), 4),
+            0x5d => (Opcode::Eor(AbsoluteX), 4),
+            0x59 => (Opcode::Eor(AbsoluteY), 4),
+            0x41 => (Opcode::Eor(IndirectX), 6),
+            0x51 => (Opcode::Eor(IndirectY), 5),
 
             // Memory increment instructions
-            0xe6 => (Opcode::Inc(AddressingMode::ZeroPage), 5),
-            0xf6 => (Opcode::Inc(AddressingMode::ZeroPageX), 6),
-            0xee => (Opcode::Inc(AddressingMode::Absolute), 6),
-            0xfe => (Opcode::Inc(AddressingMode::AbsoluteX), 7),
+            0xe6 => (Opcode::Inc(ZeroPage), 5),
+            0xf6 => (Opcode::Inc(ZeroPageX), 6),
+            0xee => (Opcode::Inc(Absolute), 6),
+            0xfe => (Opcode::Inc(AbsoluteX), 7),
             0xe8 => (Opcode::Inx, 2),
             0xc8 => (Opcode::Iny, 2),
 
             // Jumps
-            0x4c => (Opcode::Jmp(AddressingMode::Absolute), 3),
+            0x4c => (Opcode::Jmp(Absolute), 3),
             0x6c => (Opcode::Jmp(AddressingMode::Indirect), 5),
 
             // ORA (OR Memory with Accumulator)
-            0x09 => (Opcode::Ora(AddressingMode::Immediate), 2),
-            0x05 => (Opcode::Ora(AddressingMode::ZeroPage), 3),
-            0x15 => (Opcode::Ora(AddressingMode::ZeroPageX), 4),
-            0x0d => (Opcode::Ora(AddressingMode::Absolute), 4),
-            0x1d => (Opcode::Ora(AddressingMode::AbsoluteX), 4),
-            0x19 => (Opcode::Ora(AddressingMode::AbsoluteY), 4),
-            0x01 => (Opcode::Ora(AddressingMode::IndirectX), 6),
-            0x11 => (Opcode::Ora(AddressingMode::IndirectY), 5),
+            0x09 => (Opcode::Ora(Immediate), 2),
+            0x05 => (Opcode::Ora(ZeroPage), 3),
+            0x15 => (Opcode::Ora(ZeroPageX), 4),
+            0x0d => (Opcode::Ora(Absolute), 4),
+            0x1d => (Opcode::Ora(AbsoluteX), 4),
+            0x19 => (Opcode::Ora(AbsoluteY), 4),
+            0x01 => (Opcode::Ora(IndirectX), 6),
+            0x11 => (Opcode::Ora(IndirectY), 5),
 
             // Stack operations
             0x48 => (Opcode::Pha, 3),
@@ -555,7 +576,7 @@ impl Cpu {
             0x9a => (Opcode::Txs, 2),
             0x98 => (Opcode::Tya, 2),
 
-            0x20 => (Opcode::Jsr(AddressingMode::Absolute), 6),
+            0x20 => (Opcode::Jsr(Absolute), 6),
             _ => (Opcode::Nop, 1),
         }
     }
@@ -728,6 +749,28 @@ mod tests {
         assert_eq!(cpu.x, ex_x);
         assert_eq!(cpu.y, ex_y);
         assert_eq!(cpu.sp, ex_sp);
+    }
+
+
+    #[rstest]
+    #[case(vec![0xca], 0xff, 0, 0xfe, 0, 0b10000000)]
+    #[case(vec![0x88], 0xa0, 0x05, 0xa0, 0x04, 0b00000000)]
+    fn test_decs (
+        #[case] in_prg: Vec<u8>,
+        #[case] in_x: u8,
+        #[case] in_y: u8,
+        #[case] ex_x: u8,
+        #[case] ex_y: u8,
+        #[case] ex_flags: u8,
+    ) {
+        let mut cpu = setup_cpu(test_program(in_prg));
+        cpu.reset();
+        cpu.x = in_x;
+        cpu.y = in_y;
+        cpu.step();
+        assert_eq!(cpu.x, ex_x);
+        assert_eq!(cpu.y, ex_y);
+        assert_eq!(cpu.p, ex_flags);
     }
 
     #[rstest]
