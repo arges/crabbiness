@@ -17,7 +17,7 @@ struct RomHeader {
 pub struct Rom {
     header: RomHeader,
     prg_rom: Vec<u8>,
-    chr_rom: Vec<u8>,
+    pub chr_rom: Vec<u8>,
 }
 
 impl Rom {
@@ -61,6 +61,6 @@ impl Rom {
     pub fn read_byte(&self, address: u16) -> u8 {
         // This only implements mapper0
         // TODO: implement other mappers
-        self.prg_rom[((address - 0x8000) % 0x4000) as usize]
+         self.prg_rom[((address - 0x8000) % 0x4000) as usize]
     }
 }

@@ -9,6 +9,7 @@ use std::io::Read;
 
 mod bus;
 mod cpu;
+mod ppu;
 mod rom;
 
 fn main() {
@@ -19,8 +20,7 @@ fn main() {
     let r = rom::Rom::new_from_ines(&data);
 
     // setup bus, cpu
-    let mut bus = bus::Bus::new();
-    bus.load(r);
+    let bus = bus::Bus::new(r);
     let mut cpu = cpu::Cpu::new(bus);
 
     cpu.reset();

@@ -1,1 +1,155 @@
+use bitflags::bitflags;
+
 // https://www.nesdev.org/wiki/PPU
+
+pub struct Ppu {
+    chr_rom: Vec<u8>,
+    pallete: [u8; 32],
+    vram: [u8; 2048],
+    oam: [u8; 256],
+
+    ctrl_register: PpuCtrlRegister,
+    addr_register: PpuAddrRegister,
+    data_register: PpuAddrRegister,
+
+    buffer: u8,
+}
+
+impl Ppu {
+    pub fn new(chr_rom: Vec<u8>) -> Self {
+        Self {
+            chr_rom,
+            pallete: [0; 32],
+            vram: [0; 2048],
+            oam: [0; 256],
+            ctrl_register: PpuCtrlRegister::new(),
+            addr_register: PpuAddrRegister::new(),
+            data_register: PpuAddrRegister::new(),
+
+            buffer: 0,
+        }
+    }
+
+    pub fn write_ppuaddr(&mut self, input: u8) {
+        self.addr_register.update(input);
+    }
+
+    pub fn write_ppudata(&mut self, input: u8) {
+        self.data_register.update(input);
+    }
+
+    pub fn write_ppuctrl(&mut self, input: u8) {
+        self.ctrl_register.bits = input;
+    }
+
+    fn increment_vram(&mut self) {
+        self.addr_register.inc(self.ctrl_register.vram_inc());
+    }
+
+    fn mirror_vram_addr(&mut self, addr: u16) -> u16 {
+        // TODO implement this
+        return addr;
+    }
+
+    pub fn read_data(&mut self) -> u8 {
+        self.increment_vram();
+        let addr = self.addr_register.value;
+
+        match addr {
+            0..=0x1fff => {
+                let result = self.buffer;
+                self.buffer = self.chr_rom[addr as usize];
+                result
+            }
+            0x2000..=0x2fff => {
+                let result = self.buffer;
+                self.buffer = self.vram[self.mirror_vram_addr(addr) as usize];
+                result
+            }
+            0x3000..=0x3eff => panic!("not expecting this to be used"),
+            0x3f00..=0x3fff => self.pallete[(addr - 0x3f00) as usize],
+            _ => panic!("unexpected access"),
+        }
+    }
+}
+
+pub struct PpuAddrRegister {
+    pub value: u16,
+    latch: bool,
+}
+
+impl PpuAddrRegister {
+    pub fn new() -> Self {
+        Self {
+            value: 0,
+            latch: true,
+        }
+    }
+
+    pub fn update(&mut self, data: u8) {
+        let b = self.value.to_le_bytes();
+        if self.latch {
+            self.value = u16::from_le_bytes([b[0], data]);
+        } else {
+            self.value = u16::from_le_bytes([data, b[1]]);
+        }
+        self.latch = !self.latch;
+    }
+
+    pub fn inc(&mut self, input: u8) {
+        self.value = self.value.wrapping_add(input as u16);
+    }
+
+    pub fn reset(&mut self) {
+        self.latch = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rom::Rom;
+    use rstest::rstest;
+
+    #[test]
+    fn test_ppu_addr_reg() {
+        let mut addr_reg = PpuAddrRegister::new();
+        assert_eq!(addr_reg.value, 0);
+        addr_reg.update(0x06);
+        addr_reg.update(0x50);
+        assert_eq!(addr_reg.value, 0x0650);
+        addr_reg.inc(0xa);
+        assert_eq!(addr_reg.value, 0x065a);
+    }
+}
+
+bitflags! {
+    pub struct PpuCtrlRegister: u8 {
+        const BASE_NAMETABLE_ADDR_LOW = 0b0000_0001;
+        const BASE_NAMETABLE_ADDR_HIGH = 0b0000_0010;
+        const VRAM_INC_PER_CPU = 0b0000_0100;
+        const SPRITE_PATTERN_TABLE_ADDR = 0b0000_1000;
+        const BG_PATTERN_TABLE_ADDR = 0b0001_0000;
+        const SPRITE_SIZE = 0b0010_0000;
+        const PPU_SELECT = 0b0100_0000;
+        const NMISTARTS_ON_VBI = 0b1000_0000;
+    }
+}
+
+impl PpuCtrlRegister {
+    pub fn new() -> Self {
+        PpuCtrlRegister::empty()
+    }
+
+    pub fn vram_inc(&self) -> u8 {
+        if self.contains(PpuCtrlRegister::VRAM_INC_PER_CPU) {
+            32
+        } else {
+            1
+        }
+    }
+
+    pub fn update(&mut self, input: u8) {
+        self.bits = input;
+    }
+}

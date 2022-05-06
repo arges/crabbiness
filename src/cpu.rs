@@ -630,25 +630,24 @@ impl Cpu {
         self.x = 0;
         self.p = 0;
         self.pc = self.bus.read_u16(0xfffc);
-        println!("RESET -> {}", self)
+        println!("\x1b[91mRESET           \x1b[0m {}", self);
     }
 
     fn step(&mut self) {
         let instruction = self.bus.read_u8(self.pc);
         let (opcode, cycles) = self.decode(instruction);
         self.pc = self.pc.wrapping_add(1);
-
-        // TODO Fix output
         match opcode {
             Opcode::Nop => {}
             _ => {
                 println!(
-                    "{:02x} {}",
+                    "{:04x} \x1b[93m{:02x} {:16}\x1b[0m {}",
+                    self.pc,
                     instruction,
-                    opcode.to_string().to_ascii_uppercase()
+                    opcode.to_string().to_ascii_uppercase(),
+                    self
                 );
                 self.execute(opcode);
-                println!("{}", self)
             }
         }
     }
@@ -678,15 +677,14 @@ mod tests {
 
     fn setup_cpu(prg_rom: Vec<u8>) -> Cpu {
         let rom = Rom::new_from_vec(prg_rom);
-        let mut bus = Bus::new();
-        bus.load(rom);
+        let bus = Bus::new(rom);
         Cpu::new(bus)
     }
 
     fn test_program(instructions: Vec<u8>) -> Vec<u8> {
         let mut prog: Vec<u8> = instructions.to_vec();
-        prog.append(&mut vec![0; 0xbfdc - instructions.len()]);
-        prog.append(&mut vec![0x20, 0x40]);
+        prog.append(&mut vec![0; 0x3ffc - instructions.len()]);
+        prog.append(&mut vec![0x00, 0x80]);
         prog
     }
 
@@ -710,8 +708,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case(vec![0x10, 0x10], 0b1000_0000, 0x4021)]
-    #[case(vec![0x10, 0x10], 0b0000_0000, 0x4031)]
+    #[case(vec![0x10, 0x10], 0b1000_0000, 0x8001)]
+    #[case(vec![0x10, 0x10], 0b0000_0000, 0x8011)]
     fn test_branches(#[case] in_prg: Vec<u8>, #[case] in_flags: u8, #[case] ex_pc: u16) {
         let mut cpu = setup_cpu(test_program(in_prg));
         cpu.reset();
@@ -735,7 +733,7 @@ mod tests {
 
     #[rstest]
     #[case(vec![0x4C, 0x5a, 0xa5], 0xa55a)]
-    #[case(vec![0x6c, 0x23, 0x40, 0x5a, 0xa5], 0xa55a)]
+    #[case(vec![0x6c, 0x03, 0x80, 0x5a, 0xa5], 0xa55a)]
     fn test_jmp(#[case] in_prg: Vec<u8>, #[case] ex_pc: u16) {
         let mut cpu = setup_cpu(test_program(in_prg));
         cpu.reset();
