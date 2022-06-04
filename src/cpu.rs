@@ -633,7 +633,7 @@ impl Cpu {
         println!("\x1b[91mRESET           \x1b[0m {}", self);
     }
 
-    fn step(&mut self) {
+    pub fn step(&mut self) {
         let instruction = self.bus.read_u8(self.pc);
         let (opcode, cycles) = self.decode(instruction);
         self.pc = self.pc.wrapping_add(1);
@@ -649,12 +649,6 @@ impl Cpu {
                 );
                 self.execute(opcode);
             }
-        }
-    }
-
-    pub fn run(&mut self) {
-        loop {
-            self.step();
         }
     }
 }

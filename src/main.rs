@@ -4,15 +4,18 @@
 
 extern crate core;
 
-use std::fs;
 use std::io::Read;
+use std::{fs, thread};
+
+use macroquad::prelude::*;
 
 mod bus;
 mod cpu;
 mod ppu;
 mod rom;
 
-fn main() {
+#[macroquad::main("crabbiness")]
+async fn main() {
     // load rom from disk
     let mut file = fs::File::open("mario.nes").unwrap();
     let mut data: Vec<u8> = Vec::new();
@@ -23,6 +26,13 @@ fn main() {
     let bus = bus::Bus::new(r);
     let mut cpu = cpu::Cpu::new(bus);
 
+    // run cpu
     cpu.reset();
-    cpu.run();
+
+    loop {
+        cpu.step();
+        clear_background(BLUE);
+        draw_text(cpu.to_string().as_str(), 0.0, 20.0, 30.0, WHITE);
+        next_frame().await
+    }
 }
