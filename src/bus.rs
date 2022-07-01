@@ -30,7 +30,7 @@ impl Bus {
             0x2008..=0x7fff => self.read_u8(address & 0x2007),
             0x8000..=0xffff => {
                 let output = self.rom.read_byte(address);
-                // println!("got {:02x}", output);
+                //println!("got {:02x}", output);
                 output
             }
             _ => 0,
@@ -55,6 +55,14 @@ impl Bus {
 
     pub fn read_u16(&self, address: u16) -> u16 {
         ((self.read_u8(address.wrapping_add(1)) as u16) << 8) | (self.read_u8(address) as u16)
+    }
+
+    pub fn read_bytes(&self, address: u16, size: u8) -> Vec<u8> {
+        let mut bytes = vec![0; size as usize];
+        for i in 0..size {
+            bytes[i as usize] = self.read_u8(address.wrapping_add(i as u16));
+        }
+        bytes
     }
 }
 #[cfg(test)]

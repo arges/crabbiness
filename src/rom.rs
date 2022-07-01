@@ -61,6 +61,6 @@ impl Rom {
     pub fn read_byte(&self, address: u16) -> u8 {
         // This only implements mapper0
         // TODO: implement other mappers
-         self.prg_rom[((address - 0x8000) % 0x4000) as usize]
+        self.prg_rom[((address - 0x8000) % 0x4000) as usize]
     }
 }

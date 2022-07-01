@@ -7,9 +7,10 @@
 
 use crate::bus::Bus;
 use crate::cpu::AddressingMode::{
-    Absolute, AbsoluteX, AbsoluteY, Accumulator, Immediate, IndirectX, IndirectY, ZeroPage,
-    ZeroPageX, ZeroPageY,
+    Absolute, AbsoluteX, AbsoluteY, Accumulator, Immediate, Implied, Indirect, IndirectX,
+    IndirectY, Relative, ZeroPage, ZeroPageX, ZeroPageY,
 };
+use crate::cpu::Flag::Zero;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Add;
 
@@ -33,6 +34,7 @@ pub struct Cpu {
     y: u8,
     sp: u8,
     p: u8,
+    cycles: u64,
     bus: Bus,
 }
 
@@ -43,6 +45,7 @@ enum AddressingMode {
     AbsoluteY,
     Accumulator,
     Immediate,
+    Implied,
     Indirect,
     IndirectX,
     IndirectY,
@@ -54,13 +57,13 @@ enum AddressingMode {
 
 #[derive(Debug)]
 enum Opcode {
-    Adc(AddressingMode),
-    And(AddressingMode),
-    Asl(AddressingMode),
+    Adc,
+    And,
+    Asl,
     Bcc,
     Bcs,
     Beq,
-    Bit(AddressingMode),
+    Bit,
     Bmi,
     Bne,
     Bpl,
@@ -71,33 +74,33 @@ enum Opcode {
     Cld,
     Cli,
     Clv,
-    Cmp(AddressingMode),
-    Cpx(AddressingMode),
-    Cpy(AddressingMode),
-    Dec(AddressingMode),
+    Cmp,
+    Cpx,
+    Cpy,
+    Dec,
     Dex,
     Dey,
-    Eor(AddressingMode),
-    Inc(AddressingMode),
+    Eor,
+    Inc,
     Inx,
     Iny,
-    Jmp(AddressingMode),
+    Jmp,
     Jsr,
     Lda,
     Ldx,
     Ldy,
     Lsr,
     Nop,
-    Ora(AddressingMode),
+    Ora,
     Pha,
     Php,
     Pla,
     Plp,
-    Rol(AddressingMode),
-    Ror(AddressingMode),
+    Rol,
+    Ror,
     Rti,
     Rts,
-    Sbc(AddressingMode),
+    Sbc,
     Sec,
     Sed,
     Sei,
@@ -110,6 +113,89 @@ enum Opcode {
     Txa,
     Txs,
     Tya,
+}
+
+struct Instruction {
+    opcode: Opcode,
+    mode: AddressingMode,
+    length: u8,
+    cycles: u8,
+}
+
+struct InstructionBytes<'a> {
+    instruction: &'a Instruction,
+    bytes: Vec<u8>,
+}
+
+impl Display for InstructionBytes<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let instruction_string = match self.instruction.mode {
+            Absolute => {
+                format!(
+                    "${:04X?}",
+                    u16::from_le_bytes([self.bytes[1], self.bytes[2]])
+                )
+            }
+            AbsoluteX => {
+                format!(
+                    "${:04X?},X",
+                    u16::from_le_bytes([self.bytes[1], self.bytes[2]])
+                )
+            }
+            AbsoluteY => {
+                format!(
+                    "${:04X?},Y",
+                    u16::from_le_bytes([self.bytes[1], self.bytes[2]])
+                )
+            }
+            Immediate => {
+                format!("#${:02X?}", &self.bytes[1])
+            }
+            Indirect => {
+                format!(
+                    "(${:04X?})",
+                    u16::from_le_bytes([self.bytes[1], self.bytes[2]])
+                )
+            }
+            IndirectX => {
+                format!(
+                    "(${:04X?},X)",
+                    u16::from_le_bytes([self.bytes[1], self.bytes[2]])
+                )
+            }
+            IndirectY => {
+                format!(
+                    "(${:04X?}),Y",
+                    u16::from_le_bytes([self.bytes[1], self.bytes[2]])
+                )
+            }
+            ZeroPage => {
+                format!("${:02X?}", &self.bytes[1])
+            }
+            ZeroPageX => {
+                format!("${:02X?},X", &self.bytes[1])
+            }
+            ZeroPageY => {
+                format!("${:02X?},Y", &self.bytes[1])
+            }
+            _ => format!(""),
+        };
+        let mut bytes_string = String::new();
+        for b in &self.bytes {
+            bytes_string.push_str(format!("{:02X} ", b).as_str())
+        }
+        write!(
+            f,
+            "{:<9} {:<4} {:<8}",
+            bytes_string.replace("[", "").replace("]", ""),
+            self.instruction.opcode.to_string().to_ascii_uppercase(),
+            instruction_string
+                .replace("[", "")
+                .replace("]", "")
+                .replace(",", "")
+        )?;
+        Ok(())
+    }
 }
 
 impl Display for Opcode {
@@ -127,6 +213,7 @@ impl Cpu {
             x: 0,
             y: 0,
             p: 0,
+            cycles: 0,
             bus,
         }
     }
@@ -164,9 +251,11 @@ impl Cpu {
         self.p & flag as u8 == 0
     }
 
-    fn branch(&mut self, condition: bool) {
+    fn branch(&mut self, condition: bool) -> u16 {
         if condition {
-            self.pc = self.get_operand(AddressingMode::Relative);
+            self.get_operand(Relative)
+        } else {
+            self.pc
         }
     }
 
@@ -192,14 +281,15 @@ impl Cpu {
         self.bus.read_u8(STACK_BYTE_HIGH | self.sp as u16)
     }
 
-    fn execute(&mut self, opcode: Opcode) {
-        match opcode {
+    fn execute(&mut self, instruction: Instruction) {
+        let mut new_pc = self.pc.wrapping_add((instruction.length - 1) as u16);
+        match instruction.opcode {
             Opcode::Nop => {}
 
             // http://www.righto.com/2012/12/the-6502-overflow-flag-explained.html
-            Opcode::Adc(mode) => {
+            Opcode::Adc => {
                 let carry: u8 = if self.is_flag_set(Flag::Carry) { 1 } else { 0 };
-                let operand = self.get_operand(mode) as u8;
+                let operand = self.get_operand(instruction.mode) as u8;
                 let result = self.a.wrapping_add(operand.wrapping_add(carry));
                 self.change_flag(
                     Flag::Overflow,
@@ -209,12 +299,12 @@ impl Cpu {
                 self.set_zero_negative_flags(self.a);
             }
 
-            Opcode::And(mode) => {
-                self.a = self.a & (self.get_operand(mode) as u8);
+            Opcode::And => {
+                self.a = self.a & (self.get_operand(instruction.mode) as u8);
                 self.set_zero_negative_flags(self.a)
             }
-            Opcode::Asl(mode) => {
-                let op = self.get_operand(mode);
+            Opcode::Asl => {
+                let op = self.get_operand(instruction.mode);
                 self.a = op.rotate_left(1) as u8 & 0xfe;
                 if op & 0x80 != 0 {
                     self.set_flag(Flag::Carry);
@@ -224,28 +314,28 @@ impl Cpu {
                 self.set_zero_negative_flags(self.a);
             }
             Opcode::Bcc => {
-                self.branch(self.is_flag_clear(Flag::Carry));
+                new_pc = self.branch(self.is_flag_clear(Flag::Carry));
             }
             Opcode::Bcs => {
-                self.branch(self.is_flag_set(Flag::Carry));
+                new_pc = self.branch(self.is_flag_set(Flag::Carry));
             }
             Opcode::Bvc => {
-                self.branch(self.is_flag_clear(Flag::Overflow));
+                new_pc = self.branch(self.is_flag_clear(Flag::Overflow));
             }
             Opcode::Bvs => {
-                self.branch(self.is_flag_set(Flag::Overflow));
+                new_pc = self.branch(self.is_flag_set(Flag::Overflow));
             }
             Opcode::Bne => {
-                self.branch(self.is_flag_clear(Flag::Zero));
+                new_pc = self.branch(self.is_flag_clear(Flag::Zero));
             }
             Opcode::Beq => {
-                self.branch(self.is_flag_set(Flag::Zero));
+                new_pc = self.branch(self.is_flag_set(Flag::Zero));
             }
             Opcode::Bpl => {
-                self.branch(self.is_flag_clear(Flag::Negative));
+                new_pc = self.branch(self.is_flag_clear(Flag::Negative));
             }
             Opcode::Bmi => {
-                self.branch(self.is_flag_set(Flag::Negative));
+                new_pc = self.branch(self.is_flag_set(Flag::Negative));
             }
             Opcode::Clc => {
                 self.clear_flag(Flag::Carry);
@@ -268,8 +358,8 @@ impl Cpu {
             Opcode::Sed => {
                 self.set_flag(Flag::Decimal);
             }
-            Opcode::Inc(mode) => {
-                let addr = self.get_operand_address(mode);
+            Opcode::Inc => {
+                let addr = self.get_operand_address(instruction.mode);
                 let value = self.bus.read_u8(addr).wrapping_add(1);
                 self.bus.write_u8(addr, value);
             }
@@ -281,8 +371,8 @@ impl Cpu {
                 self.y = self.y.wrapping_add(1);
                 self.set_zero_negative_flags(self.y);
             }
-            Opcode::Bit(mode) => {
-                let result = self.a & self.get_operand(mode) as u8;
+            Opcode::Bit => {
+                let result = self.a & self.get_operand(instruction.mode) as u8;
                 self.set_zero_negative_flags(result);
                 self.change_flag(Flag::Overflow, result & 0x40 != 0);
                 // TODO write tests
@@ -296,26 +386,27 @@ impl Cpu {
                 // TODO write tests
             }
             Opcode::Jsr => {
-                let tgt_addr = self.get_operand_address(Absolute);
+                let tgt_addr = self.get_operand(Absolute);
                 let ret_addr = self.pc - 1;
                 self.stack_push_u16(ret_addr);
-                self.pc = tgt_addr;
+                println!("jsr target addr {:04X}", tgt_addr);
+                new_pc = tgt_addr;
                 // TODO write tests
             }
-            Opcode::Cmp(mode) => {
-                self.compare(mode, self.a);
+            Opcode::Cmp => {
+                self.compare(instruction.mode, self.a);
                 // TODO write tests
             }
-            Opcode::Cpx(mode) => {
-                self.compare(mode, self.x);
+            Opcode::Cpx => {
+                self.compare(instruction.mode, self.x);
                 // TODO write tests
             }
-            Opcode::Cpy(mode) => {
-                self.compare(mode, self.y);
+            Opcode::Cpy => {
+                self.compare(instruction.mode, self.y);
                 // TODO write tests
             }
-            Opcode::Dec(mode) => {
-                let addr = self.get_operand_address(mode);
+            Opcode::Dec => {
+                let addr = self.get_operand_address(instruction.mode);
                 let value = self.bus.read_u8(addr).wrapping_sub(1);
                 self.bus.write_u8(addr, value);
                 // TODO write tests
@@ -328,12 +419,12 @@ impl Cpu {
                 self.y = self.y.wrapping_sub(1);
                 self.set_zero_negative_flags(self.y);
             }
-            Opcode::Eor(mode) => {
-                self.a = self.a ^ (self.get_operand(mode) as u8);
+            Opcode::Eor => {
+                self.a = self.a ^ (self.get_operand(instruction.mode) as u8);
                 self.set_zero_negative_flags(self.a);
             }
-            Opcode::Ora(mode) => {
-                self.a = self.a | (self.get_operand(mode) as u8);
+            Opcode::Ora => {
+                self.a = self.a | (self.get_operand(instruction.mode) as u8);
                 self.set_zero_negative_flags(self.a);
             }
             Opcode::Pha => {
@@ -349,13 +440,13 @@ impl Cpu {
             Opcode::Plp => {
                 self.p = self.stack_pop();
             }
-            Opcode::Rol(mode) => {
+            Opcode::Rol => {
                 let carry_in = if self.p & (Flag::Carry as u8) != 0 {
                     0x01
                 } else {
                     0x00
                 };
-                let op = self.get_operand(mode);
+                let op = self.get_operand(instruction.mode);
                 if op & 0x80 != 0 {
                     self.set_flag(Flag::Carry);
                 } else {
@@ -364,13 +455,13 @@ impl Cpu {
                 self.a = op.rotate_left(1) as u8 | carry_in;
                 self.set_zero_negative_flags(self.a);
             }
-            Opcode::Ror(mode) => {
+            Opcode::Ror => {
                 let carry_in = if self.p & (Flag::Carry as u8) != 0 {
                     0x80
                 } else {
                     0x00
                 };
-                let op = self.get_operand(mode);
+                let op = self.get_operand(instruction.mode);
                 if op & 0x01 != 0 {
                     self.set_flag(Flag::Carry);
                 } else {
@@ -380,13 +471,13 @@ impl Cpu {
                 self.set_zero_negative_flags(self.a);
             }
 
-            Opcode::Sbc(mode) => {
+            Opcode::Sbc => {
                 let carry: u8 = if self.is_flag_clear(Flag::Carry) {
                     1
                 } else {
                     0
                 };
-                let operand = self.get_operand(mode) as u8;
+                let operand = self.get_operand(instruction.mode) as u8;
                 let result = self.a.wrapping_sub(operand.wrapping_add(carry));
                 self.change_flag(
                     Flag::Overflow,
@@ -394,6 +485,32 @@ impl Cpu {
                 );
                 self.a = result;
                 self.set_zero_negative_flags(self.a);
+            }
+            Opcode::Sta => {
+                let addr = self.get_operand_address(instruction.mode);
+                self.bus.write_u8(addr, self.a);
+            }
+
+            Opcode::Stx => {
+                let addr = self.get_operand_address(instruction.mode);
+                self.bus.write_u8(addr, self.x);
+            }
+
+            Opcode::Sty => {
+                let addr = self.get_operand_address(instruction.mode);
+                self.bus.write_u8(addr, self.y);
+            }
+
+            Opcode::Lda => {
+                self.a = self.get_operand(instruction.mode) as u8;
+            }
+
+            Opcode::Ldx => {
+                self.x = self.get_operand(instruction.mode) as u8;
+            }
+
+            Opcode::Ldy => {
+                self.y = self.get_operand(instruction.mode) as u8;
             }
 
             Opcode::Tax => {
@@ -421,13 +538,16 @@ impl Cpu {
                 self.set_zero_negative_flags(self.a);
             }
 
-            Opcode::Jmp(mode) => {
-                self.pc = self.get_operand(mode);
+            Opcode::Jmp => {
+                new_pc = self.get_operand(instruction.mode);
+                println!("jmp! pc is now {:02X}", self.pc)
             }
             _ => {
-                panic!("unimplemented opcode: {}", opcode);
+                panic!("unimplemented opcode: {}", instruction.opcode);
             }
         }
+
+        self.pc = new_pc;
     }
 
     /// Returns the address of the operand given the addressing mode. Some mods such as Immediate and Accumulator will return 0 as an invalid state
@@ -437,18 +557,22 @@ impl Cpu {
             ZeroPage => 0x0000 + self.bus.read_u8(self.pc) as u16,
             ZeroPageX => 0x0000 + self.bus.read_u8(self.pc).wrapping_add(self.x) as u16,
             ZeroPageY => 0x0000 + self.bus.read_u8(self.pc).wrapping_add(self.y) as u16,
-            Absolute => self.pc,
+            Absolute => {
+                println!("absolute pc {:02X}", self.pc);
+                self.pc
+            }
             AbsoluteX => self.pc.wrapping_add(self.x as u16),
             AbsoluteY => self.pc.wrapping_add(self.y as u16),
 
-            AddressingMode::Indirect => self.bus.read_u16(self.pc),
+            Indirect => self.bus.read_u16(self.pc),
             IndirectX => self.bus.read_u16(self.pc).wrapping_add(self.x as u16),
             IndirectY => self.bus.read_u16(self.pc).wrapping_add(self.y as u16),
             _ => 0,
         }
     }
 
-    /// Given the current state of the pc and addressing mode, this function will return the appropriate operand
+    /// Given the current state of the pc and addressing mode, this function will return the
+    /// appropriate operand.
     /// reference: https://www.nesdev.org/wiki/CPU_addressing_modes
     fn get_operand(&self, mode: AddressingMode) -> u16 {
         match mode {
@@ -465,163 +589,916 @@ impl Cpu {
         }
     }
 
-    /// decode takes in an opcode and outputs a tuple with opcode/addressing mode and cycles
+    /// decode takes in an opcode and outputs an instruction structure
     /// reference: https://www.nesdev.org/obelisk-6502-guide/reference.html
-    fn decode(&self, opcode: u8) -> (Opcode, u8) {
+    fn decode(&self, opcode: u8) -> Instruction {
         match opcode {
             // ADC (Add Memory to Accumulator with Carry)
-            0x69 => (Opcode::Adc(Immediate), 2),
-            0x65 => (Opcode::Adc(ZeroPage), 3),
-            0x75 => (Opcode::Adc(ZeroPageX), 4),
-            0x6d => (Opcode::Adc(Absolute), 4),
-            0x7d => (Opcode::Adc(AbsoluteX), 4),
-            0x79 => (Opcode::Adc(AbsoluteY), 4),
-            0x61 => (Opcode::Adc(IndirectX), 6),
-            0x71 => (Opcode::Adc(IndirectY), 5),
+            0x69 => Instruction {
+                opcode: Opcode::Adc,
+                mode: Immediate,
+                length: 2,
+                cycles: 2,
+            },
+            0x65 => Instruction {
+                opcode: Opcode::Adc,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 3,
+            },
+            0x75 => Instruction {
+                opcode: Opcode::Adc,
+                mode: ZeroPageX,
+                length: 2,
+                cycles: 4,
+            },
+            0x6d => Instruction {
+                opcode: Opcode::Adc,
+                mode: Absolute,
+                length: 3,
+                cycles: 4,
+            },
+            0x7d => Instruction {
+                opcode: Opcode::Adc,
+                mode: AbsoluteX,
+                length: 3,
+                cycles: 4,
+            },
+            0x79 => Instruction {
+                opcode: Opcode::Adc,
+                mode: AbsoluteY,
+                length: 3,
+                cycles: 4,
+            },
+            0x61 => Instruction {
+                opcode: Opcode::Adc,
+                mode: IndirectX,
+                length: 2,
+                cycles: 6,
+            },
+            0x71 => Instruction {
+                opcode: Opcode::Adc,
+                mode: IndirectY,
+                length: 2,
+                cycles: 5,
+            },
 
             // AND (bitwise AND with accumulator)
-            0x29 => (Opcode::And(Immediate), 2),
-            0x25 => (Opcode::And(ZeroPage), 3),
-            0x35 => (Opcode::And(ZeroPageX), 4),
-            0x2d => (Opcode::And(Absolute), 4),
-            0x3d => (Opcode::And(AbsoluteX), 4),
-            0x39 => (Opcode::And(AbsoluteY), 4),
-            0x21 => (Opcode::And(IndirectX), 6),
-            0x31 => (Opcode::And(IndirectY), 5),
+            0x29 => Instruction {
+                opcode: Opcode::And,
+                mode: Immediate,
+                length: 2,
+                cycles: 2,
+            },
+            0x25 => Instruction {
+                opcode: Opcode::And,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 3,
+            },
+            0x35 => Instruction {
+                opcode: Opcode::And,
+                mode: ZeroPageX,
+                length: 2,
+                cycles: 4,
+            },
+            0x2d => Instruction {
+                opcode: Opcode::And,
+                mode: Absolute,
+                length: 3,
+                cycles: 4,
+            },
+            0x3d => Instruction {
+                opcode: Opcode::And,
+                mode: AbsoluteX,
+                length: 3,
+                cycles: 4,
+            },
+            0x39 => Instruction {
+                opcode: Opcode::And,
+                mode: AbsoluteY,
+                length: 3,
+                cycles: 4,
+            },
+            0x21 => Instruction {
+                opcode: Opcode::And,
+                mode: IndirectX,
+                length: 2,
+                cycles: 6,
+            },
+            0x31 => Instruction {
+                opcode: Opcode::And,
+                mode: IndirectY,
+                length: 2,
+                cycles: 5,
+            },
 
             // ASL (Arithmetic Shift Left)
-            0x0a => (Opcode::Asl(Accumulator), 2),
-            0x06 => (Opcode::Asl(ZeroPage), 5),
-            0x16 => (Opcode::Asl(ZeroPageX), 6),
-            0x0e => (Opcode::Asl(Absolute), 2),
-            0x1e => (Opcode::Asl(AbsoluteX), 4),
+            0x0a => Instruction {
+                opcode: Opcode::Asl,
+                mode: Accumulator,
+                length: 1,
+                cycles: 2,
+            },
+            0x06 => Instruction {
+                opcode: Opcode::Asl,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 5,
+            },
+            0x16 => Instruction {
+                opcode: Opcode::Asl,
+                mode: ZeroPageX,
+                length: 2,
+                cycles: 6,
+            },
+            0x0e => Instruction {
+                opcode: Opcode::Asl,
+                mode: Absolute,
+                length: 3,
+                cycles: 2,
+            },
+            0x1e => Instruction {
+                opcode: Opcode::Asl,
+                mode: AbsoluteX,
+                length: 3,
+                cycles: 4,
+            },
 
             // Branch instructions
-            0x90 => (Opcode::Bcc, 2),
-            0xb0 => (Opcode::Bcs, 2),
-            0xf0 => (Opcode::Beq, 2),
-            0x30 => (Opcode::Bmi, 2),
-            0xd0 => (Opcode::Bne, 2),
-            0x10 => (Opcode::Bpl, 2),
+            0x90 => Instruction {
+                opcode: Opcode::Bcc,
+                mode: Implied,
+                length: 2,
+                cycles: 2,
+            },
+            0xb0 => Instruction {
+                opcode: Opcode::Bcs,
+                mode: Relative,
+                length: 2,
+                cycles: 2,
+            },
+            0xf0 => Instruction {
+                opcode: Opcode::Beq,
+                mode: Relative,
+                length: 2,
+                cycles: 2,
+            },
+            0x30 => Instruction {
+                opcode: Opcode::Bmi,
+                mode: Relative,
+                length: 2,
+                cycles: 2,
+            },
+            0xd0 => Instruction {
+                opcode: Opcode::Bne,
+                mode: Relative,
+                length: 2,
+                cycles: 2,
+            },
+            0x10 => Instruction {
+                opcode: Opcode::Bpl,
+                mode: Relative,
+                length: 2,
+                cycles: 2,
+            },
 
             // BIT (test BITs in Memory With Accumulator)
-            0x24 => (Opcode::Bit(ZeroPage), 3),
-            0x2c => (Opcode::Bit(Absolute), 4),
+            0x24 => Instruction {
+                opcode: Opcode::Bit,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 3,
+            },
+            0x2c => Instruction {
+                opcode: Opcode::Bit,
+                mode: Absolute,
+                length: 3,
+                cycles: 4,
+            },
 
             // BRK (Force break)
-            0x00 => (Opcode::Brk, 7),
+            0x00 => Instruction {
+                opcode: Opcode::Brk,
+                mode: Implied,
+                length: 1,
+                cycles: 7,
+            },
 
             // Flag operations
-            0x18 => (Opcode::Clc, 2),
-            0x38 => (Opcode::Sec, 2),
-            0x58 => (Opcode::Cli, 2),
-            0x78 => (Opcode::Sei, 2),
-            0xb8 => (Opcode::Clv, 2),
-            0xd8 => (Opcode::Cld, 2),
-            0xf8 => (Opcode::Sed, 2),
+            0x18 => Instruction {
+                opcode: Opcode::Clc,
+                mode: Implied,
+                length: 1,
+                cycles: 2,
+            },
+            0x38 => Instruction {
+                opcode: Opcode::Sec,
+                mode: Implied,
+                length: 1,
+                cycles: 2,
+            },
+            0x58 => Instruction {
+                opcode: Opcode::Cli,
+                mode: Implied,
+                length: 1,
+                cycles: 2,
+            },
+            0x78 => Instruction {
+                opcode: Opcode::Sei,
+                mode: Implied,
+                length: 1,
+                cycles: 2,
+            },
+            0xb8 => Instruction {
+                opcode: Opcode::Clv,
+                mode: Implied,
+                length: 1,
+                cycles: 2,
+            },
+            0xd8 => Instruction {
+                opcode: Opcode::Cld,
+                mode: Implied,
+                length: 1,
+                cycles: 2,
+            },
+            0xf8 => Instruction {
+                opcode: Opcode::Sed,
+                mode: Implied,
+                length: 1,
+                cycles: 2,
+            },
 
             // CMP (Compare Memory with Accumulator)
-            0xc9 => (Opcode::Cmp(Immediate), 2),
-            0xc5 => (Opcode::Cmp(ZeroPage), 3),
-            0xd5 => (Opcode::Cmp(ZeroPageX), 4),
-            0xcd => (Opcode::Cmp(Absolute), 4),
-            0xdd => (Opcode::Cmp(AbsoluteX), 4),
-            0xd9 => (Opcode::Cmp(AbsoluteY), 4),
-            0xc1 => (Opcode::Cmp(IndirectX), 6),
-            0xd1 => (Opcode::Cmp(IndirectY), 5),
+            0xc9 => Instruction {
+                opcode: Opcode::Cmp,
+                mode: Immediate,
+                length: 2,
+                cycles: 2,
+            },
+            0xc5 => Instruction {
+                opcode: Opcode::Cmp,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 3,
+            },
+            0xd5 => Instruction {
+                opcode: Opcode::Cmp,
+                mode: ZeroPageX,
+                length: 2,
+                cycles: 4,
+            },
+            0xcd => Instruction {
+                opcode: Opcode::Cmp,
+                mode: Absolute,
+                length: 3,
+                cycles: 4,
+            },
+            0xdd => Instruction {
+                opcode: Opcode::Cmp,
+                mode: AbsoluteX,
+                length: 3,
+                cycles: 4,
+            },
+            0xd9 => Instruction {
+                opcode: Opcode::Cmp,
+                mode: AbsoluteY,
+                length: 3,
+                cycles: 4,
+            },
+            0xc1 => Instruction {
+                opcode: Opcode::Cmp,
+                mode: IndirectX,
+                length: 2,
+                cycles: 6,
+            },
+            0xd1 => Instruction {
+                opcode: Opcode::Cmp,
+                mode: IndirectY,
+                length: 2,
+                cycles: 5,
+            },
 
             // CPX (Compare Memory and Index X)
-            0xe0 => (Opcode::Cpx(Immediate), 2),
-            0xe4 => (Opcode::Cpx(ZeroPage), 3),
-            0xec => (Opcode::Cpx(Absolute), 4),
+            0xe0 => Instruction {
+                opcode: Opcode::Cpx,
+                mode: Immediate,
+                length: 2,
+                cycles: 2,
+            },
+            0xe4 => Instruction {
+                opcode: Opcode::Cpx,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 3,
+            },
+            0xec => Instruction {
+                opcode: Opcode::Cpx,
+                mode: Absolute,
+                length: 3,
+                cycles: 4,
+            },
 
             // CPY (Compare Memory and Index Y)
-            0xc0 => (Opcode::Cpy(Immediate), 2),
-            0xc4 => (Opcode::Cpy(ZeroPage), 3),
-            0xcc => (Opcode::Cpy(Absolute), 4),
+            0xc0 => Instruction {
+                opcode: Opcode::Cpy,
+                mode: Immediate,
+                length: 2,
+                cycles: 2,
+            },
+            0xc4 => Instruction {
+                opcode: Opcode::Cpy,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 3,
+            },
+            0xcc => Instruction {
+                opcode: Opcode::Cpy,
+                mode: Absolute,
+                length: 3,
+                cycles: 4,
+            },
 
             // DEC (Decrement Memory by One)
-            0xc6 => (Opcode::Dec(ZeroPage), 5),
-            0xd6 => (Opcode::Dec(ZeroPageX), 6),
-            0xce => (Opcode::Dec(Absolute), 6),
-            0xde => (Opcode::Dec(AbsoluteX), 7),
+            0xc6 => Instruction {
+                opcode: Opcode::Dec,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 5,
+            },
+            0xd6 => Instruction {
+                opcode: Opcode::Dec,
+                mode: ZeroPageX,
+                length: 2,
+                cycles: 6,
+            },
+            0xce => Instruction {
+                opcode: Opcode::Dec,
+                mode: Absolute,
+                length: 3,
+                cycles: 6,
+            },
+            0xde => Instruction {
+                opcode: Opcode::Dec,
+                mode: AbsoluteX,
+                length: 3,
+                cycles: 7,
+            },
 
             // DEX (Decrement Index X by One)
-            0xca => (Opcode::Dex, 2),
+            0xca => Instruction {
+                opcode: Opcode::Dex,
+                mode: Implied,
+                length: 1,
+                cycles: 2,
+            },
 
             // DEY (Decrement Index Y by One)
-            0x88 => (Opcode::Dey, 2),
+            0x88 => Instruction {
+                opcode: Opcode::Dey,
+                mode: Implied,
+                length: 1,
+                cycles: 2,
+            },
 
             // EOR (EOR Memory with Accumulator)
-            0x49 => (Opcode::Eor(Immediate), 2),
-            0x45 => (Opcode::Eor(ZeroPage), 3),
-            0x55 => (Opcode::Eor(ZeroPageX), 4),
-            0x4d => (Opcode::Eor(Absolute), 4),
-            0x5d => (Opcode::Eor(AbsoluteX), 4),
-            0x59 => (Opcode::Eor(AbsoluteY), 4),
-            0x41 => (Opcode::Eor(IndirectX), 6),
-            0x51 => (Opcode::Eor(IndirectY), 5),
+            0x49 => Instruction {
+                opcode: Opcode::Eor,
+                mode: Immediate,
+                length: 2,
+                cycles: 2,
+            },
+            0x45 => Instruction {
+                opcode: Opcode::Eor,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 3,
+            },
+            0x55 => Instruction {
+                opcode: Opcode::Eor,
+                mode: ZeroPageX,
+                length: 2,
+                cycles: 4,
+            },
+            0x4d => Instruction {
+                opcode: Opcode::Eor,
+                mode: Absolute,
+                length: 3,
+                cycles: 4,
+            },
+            0x5d => Instruction {
+                opcode: Opcode::Eor,
+                mode: AbsoluteX,
+                length: 3,
+                cycles: 4,
+            },
+            0x59 => Instruction {
+                opcode: Opcode::Eor,
+                mode: AbsoluteY,
+                length: 3,
+                cycles: 4,
+            },
+            0x41 => Instruction {
+                opcode: Opcode::Eor,
+                mode: IndirectX,
+                length: 2,
+                cycles: 6,
+            },
+            0x51 => Instruction {
+                opcode: Opcode::Eor,
+                mode: IndirectY,
+                length: 2,
+                cycles: 5,
+            },
 
             // Memory increment instructions
-            0xe6 => (Opcode::Inc(ZeroPage), 5),
-            0xf6 => (Opcode::Inc(ZeroPageX), 6),
-            0xee => (Opcode::Inc(Absolute), 6),
-            0xfe => (Opcode::Inc(AbsoluteX), 7),
-            0xe8 => (Opcode::Inx, 2),
-            0xc8 => (Opcode::Iny, 2),
+            0xe6 => Instruction {
+                opcode: Opcode::Inc,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 5,
+            },
+            0xf6 => Instruction {
+                opcode: Opcode::Inc,
+                mode: ZeroPageX,
+                length: 2,
+                cycles: 6,
+            },
+            0xee => Instruction {
+                opcode: Opcode::Inc,
+                mode: Absolute,
+                length: 3,
+                cycles: 6,
+            },
+            0xfe => Instruction {
+                opcode: Opcode::Inc,
+                mode: AbsoluteX,
+                length: 3,
+                cycles: 7,
+            },
+            0xe8 => Instruction {
+                opcode: Opcode::Inx,
+                mode: Indirect,
+                length: 1,
+                cycles: 2,
+            },
+            0xc8 => Instruction {
+                opcode: Opcode::Iny,
+                mode: Indirect,
+                length: 1,
+                cycles: 2,
+            },
 
             // Jumps
-            0x4c => (Opcode::Jmp(Absolute), 3),
-            0x6c => (Opcode::Jmp(AddressingMode::Indirect), 5),
+            0x4c => Instruction {
+                opcode: Opcode::Jmp,
+                mode: Absolute,
+                length: 3,
+                cycles: 3,
+            },
+            0x6c => Instruction {
+                opcode: Opcode::Jmp,
+                mode: Indirect,
+                length: 3,
+                cycles: 5,
+            },
 
-            // ORA (OR Memory with Accumulator)
-            0x09 => (Opcode::Ora(Immediate), 2),
-            0x05 => (Opcode::Ora(ZeroPage), 3),
-            0x15 => (Opcode::Ora(ZeroPageX), 4),
-            0x0d => (Opcode::Ora(Absolute), 4),
-            0x1d => (Opcode::Ora(AbsoluteX), 4),
-            0x19 => (Opcode::Ora(AbsoluteY), 4),
-            0x01 => (Opcode::Ora(IndirectX), 6),
-            0x11 => (Opcode::Ora(IndirectY), 5),
+            // LDA (load Accumulator)
+            0xA9 => Instruction {
+                opcode: Opcode::Lda,
+                mode: Immediate,
+                length: 2,
+                cycles: 2,
+            },
+            0xA5 => Instruction {
+                opcode: Opcode::Lda,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 3,
+            },
+            0xB5 => Instruction {
+                opcode: Opcode::Lda,
+                mode: ZeroPageX,
+                length: 2,
+                cycles: 4,
+            },
+            0xAD => Instruction {
+                opcode: Opcode::Lda,
+                mode: Absolute,
+                length: 3,
+                cycles: 4,
+            },
+            0xBD => Instruction {
+                opcode: Opcode::Lda,
+                mode: AbsoluteX,
+                length: 3,
+                cycles: 4,
+            },
+            0xB9 => Instruction {
+                opcode: Opcode::Lda,
+                mode: AbsoluteY,
+                length: 3,
+                cycles: 4,
+            },
+            0xA1 => Instruction {
+                opcode: Opcode::Lda,
+                mode: IndirectX,
+                length: 2,
+                cycles: 6,
+            },
+            0xB1 => Instruction {
+                opcode: Opcode::Lda,
+                mode: IndirectY,
+                length: 2,
+                cycles: 5,
+            },
+
+            // LDX (Load X Register)
+            0xA2 => Instruction {
+                opcode: Opcode::Ldx,
+                mode: Immediate,
+                length: 2,
+                cycles: 2,
+            },
+            0xA6 => Instruction {
+                opcode: Opcode::Ldx,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 3,
+            },
+            0xB6 => Instruction {
+                opcode: Opcode::Ldx,
+                mode: ZeroPageY,
+                length: 2,
+                cycles: 4,
+            },
+            0xAE => Instruction {
+                opcode: Opcode::Ldx,
+                mode: Absolute,
+                length: 3,
+                cycles: 4,
+            },
+            0xBE => Instruction {
+                opcode: Opcode::Ldx,
+                mode: AbsoluteY,
+                length: 3,
+                cycles: 4,
+            },
+
+            // LDY (Load Y Register)
+            0xA0 => Instruction {
+                opcode: Opcode::Ldy,
+                mode: Immediate,
+                length: 2,
+                cycles: 2,
+            },
+            0xA4 => Instruction {
+                opcode: Opcode::Ldy,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 3,
+            },
+            0xB4 => Instruction {
+                opcode: Opcode::Ldy,
+                mode: ZeroPageX,
+                length: 2,
+                cycles: 4,
+            },
+            0xAC => Instruction {
+                opcode: Opcode::Ldy,
+                mode: Absolute,
+                length: 3,
+                cycles: 4,
+            },
+            0xBC => Instruction {
+                opcode: Opcode::Ldy,
+                mode: AbsoluteX,
+                length: 3,
+                cycles: 4,
+            },
+
+            // ORA (OR Memory with Accumulator
+            0x09 => Instruction {
+                opcode: Opcode::Ora,
+                mode: Immediate,
+                length: 2,
+                cycles: 2,
+            },
+            0x05 => Instruction {
+                opcode: Opcode::Ora,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 3,
+            },
+            0x15 => Instruction {
+                opcode: Opcode::Ora,
+                mode: ZeroPageX,
+                length: 2,
+                cycles: 4,
+            },
+            0x0d => Instruction {
+                opcode: Opcode::Ora,
+                mode: Absolute,
+                length: 3,
+                cycles: 4,
+            },
+            0x1d => Instruction {
+                opcode: Opcode::Ora,
+                mode: AbsoluteX,
+                length: 3,
+                cycles: 4,
+            },
+            0x19 => Instruction {
+                opcode: Opcode::Ora,
+                mode: AbsoluteY,
+                length: 3,
+                cycles: 4,
+            },
+            0x01 => Instruction {
+                opcode: Opcode::Ora,
+                mode: IndirectX,
+                length: 2,
+                cycles: 6,
+            },
+            0x11 => Instruction {
+                opcode: Opcode::Ora,
+                mode: IndirectY,
+                length: 2,
+                cycles: 5,
+            },
 
             // Stack operations
-            0x48 => (Opcode::Pha, 3),
-            0x08 => (Opcode::Php, 3),
-            0x68 => (Opcode::Pla, 3),
-            0x28 => (Opcode::Plp, 3),
+            0x48 => Instruction {
+                opcode: Opcode::Pha,
+                mode: Implied,
+                length: 1,
+                cycles: 3,
+            },
+            0x08 => Instruction {
+                opcode: Opcode::Php,
+                mode: Implied,
+                length: 1,
+                cycles: 3,
+            },
+            0x68 => Instruction {
+                opcode: Opcode::Pla,
+                mode: Implied,
+                length: 1,
+                cycles: 3,
+            },
+            0x28 => Instruction {
+                opcode: Opcode::Plp,
+                mode: Implied,
+                length: 1,
+                cycles: 3,
+            },
 
             // Rotates
-            0x2a => (Opcode::Rol(Accumulator), 2),
-            0x26 => (Opcode::Rol(ZeroPage), 5),
-            0x36 => (Opcode::Rol(ZeroPageX), 6),
-            0x2e => (Opcode::Rol(Absolute), 6),
-            0x3e => (Opcode::Rol(AbsoluteX), 7),
-            0x6a => (Opcode::Ror(Accumulator), 2),
-            0x66 => (Opcode::Ror(ZeroPage), 5),
-            0x76 => (Opcode::Ror(ZeroPageX), 6),
-            0x6e => (Opcode::Ror(Absolute), 6),
-            0x7e => (Opcode::Ror(AbsoluteX), 7),
+            0x2a => Instruction {
+                opcode: Opcode::Rol,
+                mode: Accumulator,
+                length: 1,
+                cycles: 2,
+            },
+            0x26 => Instruction {
+                opcode: Opcode::Rol,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 5,
+            },
+            0x36 => Instruction {
+                opcode: Opcode::Rol,
+                mode: ZeroPageX,
+                length: 2,
+                cycles: 6,
+            },
+            0x2e => Instruction {
+                opcode: Opcode::Rol,
+                mode: Absolute,
+                length: 3,
+                cycles: 6,
+            },
+            0x3e => Instruction {
+                opcode: Opcode::Rol,
+                mode: AbsoluteX,
+                length: 3,
+                cycles: 7,
+            },
+            0x6a => Instruction {
+                opcode: Opcode::Ror,
+                mode: Accumulator,
+                length: 1,
+                cycles: 2,
+            },
+            0x66 => Instruction {
+                opcode: Opcode::Ror,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 5,
+            },
+            0x76 => Instruction {
+                opcode: Opcode::Ror,
+                mode: ZeroPageX,
+                length: 2,
+                cycles: 6,
+            },
+            0x6e => Instruction {
+                opcode: Opcode::Ror,
+                mode: Absolute,
+                length: 3,
+                cycles: 6,
+            },
+            0x7e => Instruction {
+                opcode: Opcode::Ror,
+                mode: AbsoluteX,
+                length: 3,
+                cycles: 7,
+            },
 
             // Subtract with Carry
-            0xe9 => (Opcode::Sbc(Immediate), 2),
-            0xe5 => (Opcode::Sbc(ZeroPage), 3),
-            0xf5 => (Opcode::Sbc(ZeroPageX), 4),
-            0xed => (Opcode::Sbc(Absolute), 4),
-            0xfd => (Opcode::Sbc(AbsoluteX), 4),
-            0xf9 => (Opcode::Sbc(AbsoluteY), 4),
-            0xe1 => (Opcode::Sbc(IndirectX), 6),
-            0xf1 => (Opcode::Sbc(IndirectY), 5),
+            0xe9 => Instruction {
+                opcode: Opcode::Sbc,
+                mode: Immediate,
+                length: 2,
+                cycles: 2,
+            },
+            0xe5 => Instruction {
+                opcode: Opcode::Sbc,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 3,
+            },
+            0xf5 => Instruction {
+                opcode: Opcode::Sbc,
+                mode: ZeroPageX,
+                length: 2,
+                cycles: 4,
+            },
+            0xed => Instruction {
+                opcode: Opcode::Sbc,
+                mode: Absolute,
+                length: 3,
+                cycles: 4,
+            },
+            0xfd => Instruction {
+                opcode: Opcode::Sbc,
+                mode: AbsoluteX,
+                length: 3,
+                cycles: 4,
+            },
+            0xf9 => Instruction {
+                opcode: Opcode::Sbc,
+                mode: AbsoluteY,
+                length: 3,
+                cycles: 4,
+            },
+            0xe1 => Instruction {
+                opcode: Opcode::Sbc,
+                mode: IndirectX,
+                length: 2,
+                cycles: 6,
+            },
+            0xf1 => Instruction {
+                opcode: Opcode::Sbc,
+                mode: IndirectY,
+                length: 2,
+                cycles: 5,
+            },
+
+            // STA (Store A register)
+            0x85 => Instruction {
+                opcode: Opcode::Sta,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 3,
+            },
+            0x95 => Instruction {
+                opcode: Opcode::Sta,
+                mode: ZeroPageX,
+                length: 2,
+                cycles: 4,
+            },
+            0x8d => Instruction {
+                opcode: Opcode::Sta,
+                mode: Absolute,
+                length: 3,
+                cycles: 4,
+            },
+            0x9d => Instruction {
+                opcode: Opcode::Sta,
+                mode: AbsoluteX,
+                length: 3,
+                cycles: 5,
+            },
+            0x99 => Instruction {
+                opcode: Opcode::Sta,
+                mode: AbsoluteY,
+                length: 3,
+                cycles: 5,
+            },
+            0x81 => Instruction {
+                opcode: Opcode::Sta,
+                mode: IndirectX,
+                length: 2,
+                cycles: 6,
+            },
+            0x91 => Instruction {
+                opcode: Opcode::Sta,
+                mode: IndirectY,
+                length: 2,
+                cycles: 6,
+            },
+
+            // STX (Store X register)
+            0x86 => Instruction {
+                opcode: Opcode::Stx,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 3,
+            },
+            0x96 => Instruction {
+                opcode: Opcode::Stx,
+                mode: ZeroPageY,
+                length: 2,
+                cycles: 4,
+            },
+            0x8e => Instruction {
+                opcode: Opcode::Stx,
+                mode: Absolute,
+                length: 3,
+                cycles: 4,
+            },
+
+            // STY (Store Y register)
+            0x84 => Instruction {
+                opcode: Opcode::Sty,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 3,
+            },
+            0x94 => Instruction {
+                opcode: Opcode::Sty,
+                mode: ZeroPageX,
+                length: 2,
+                cycles: 4,
+            },
+            0x8c => Instruction {
+                opcode: Opcode::Sty,
+                mode: Absolute,
+                length: 3,
+                cycles: 4,
+            },
 
             // Transfers
-            0xaa => (Opcode::Tax, 2),
-            0xa8 => (Opcode::Tay, 2),
-            0xba => (Opcode::Tsx, 2),
-            0x8a => (Opcode::Txa, 2),
-            0x9a => (Opcode::Txs, 2),
-            0x98 => (Opcode::Tya, 2),
+            0xaa => Instruction {
+                opcode: Opcode::Tax,
+                mode: Implied,
+                length: 1,
+                cycles: 2,
+            },
+            0xa8 => Instruction {
+                opcode: Opcode::Tay,
+                mode: Implied,
+                length: 1,
+                cycles: 2,
+            },
+            0xba => Instruction {
+                opcode: Opcode::Tsx,
+                mode: Implied,
+                length: 1,
+                cycles: 2,
+            },
+            0x8a => Instruction {
+                opcode: Opcode::Txa,
+                mode: Implied,
+                length: 1,
+                cycles: 2,
+            },
+            0x9a => Instruction {
+                opcode: Opcode::Txs,
+                mode: Implied,
+                length: 1,
+                cycles: 2,
+            },
+            0x98 => Instruction {
+                opcode: Opcode::Tya,
+                mode: Implied,
+                length: 1,
+                cycles: 2,
+            },
 
-            0x20 => (Opcode::Jsr, 6),
-            _ => (Opcode::Nop, 1),
+            0x20 => Instruction {
+                opcode: Opcode::Jsr,
+                mode: Absolute,
+                length: 3,
+                cycles: 6,
+            },
+            _ => Instruction {
+                opcode: Opcode::Nop,
+                mode: Implied,
+                length: 1,
+                cycles: 1,
+            },
         }
     }
 
@@ -629,27 +1506,28 @@ impl Cpu {
         self.a = 0;
         self.x = 0;
         self.p = 0;
-        self.pc = self.bus.read_u16(0xfffc);
-        println!("\x1b[91mRESET           \x1b[0m {}", self);
+        self.pc = 0xc000;
+        println!(
+            "\x1b[94m{:04X}\x1b[0m \x1b[91m{:<23}\x1b[0m {}",
+            self.pc, "RESET", self
+        )
     }
 
     pub fn step(&mut self) {
-        let instruction = self.bus.read_u8(self.pc);
-        let (opcode, cycles) = self.decode(instruction);
+        let instruction = self.decode(self.bus.read_u8(self.pc));
+        let instruction_bytes = InstructionBytes {
+            instruction: &instruction,
+            bytes: self.bus.read_bytes(self.pc, instruction.length),
+        };
+
+        self.cycles = self.cycles.wrapping_add(instruction.cycles as u64);
+
+        println!(
+            "\x1b[94m{:04X}\x1b[0m \x1b[93m{}\x1b[0m {}",
+            self.pc, instruction_bytes, self
+        );
         self.pc = self.pc.wrapping_add(1);
-        match opcode {
-            Opcode::Nop => {}
-            _ => {
-                println!(
-                    "{:04x} \x1b[93m{:02x} {:16}\x1b[0m {}",
-                    self.pc,
-                    instruction,
-                    opcode.to_string().to_ascii_uppercase(),
-                    self
-                );
-                self.execute(opcode);
-            }
-        }
+        self.execute(instruction);
     }
 }
 
@@ -657,8 +1535,8 @@ impl Display for Cpu {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
-            "pc:{:04x} sp:{:02x} a:{:02x} x:{:02x} y:{:02x} flags:{:08b}",
-            self.pc, self.sp, self.a, self.x, self.y, self.p
+            "A:{:04X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} CYC:{}",
+            self.a, self.x, self.y, self.p, self.sp, self.cycles
         )
     }
 }
@@ -702,8 +1580,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case(vec![0x10, 0x10], 0b1000_0000, 0x8001)]
-    #[case(vec![0x10, 0x10], 0b0000_0000, 0x8011)]
+    #[case(vec![0x10, 0x10], 0b1000_0000, 0x8002)]
+    #[case(vec![0x10, 0x10], 0b0000_0000, 0x8012)]
     fn test_branches(#[case] in_prg: Vec<u8>, #[case] in_flags: u8, #[case] ex_pc: u16) {
         let mut cpu = setup_cpu(test_program(in_prg));
         cpu.reset();

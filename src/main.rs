@@ -17,7 +17,7 @@ mod rom;
 #[macroquad::main("crabbiness")]
 async fn main() {
     // load rom from disk
-    let mut file = fs::File::open("mario.nes").unwrap();
+    let mut file = fs::File::open("nestest.nes").unwrap();
     let mut data: Vec<u8> = Vec::new();
     file.read_to_end(&mut data).unwrap();
     let r = rom::Rom::new_from_ines(&data);
