@@ -127,63 +127,75 @@ struct InstructionBytes<'a> {
     bytes: Vec<u8>,
 }
 
+impl InstructionBytes<'_> {
+    fn get_address(&self) -> u16 {
+        if self.bytes.len() == 3 {
+            u16::from_le_bytes([self.bytes[1], self.bytes[2]])
+        } else {
+            0
+        }
+    }
+
+    fn get_immediate(&self) -> u8 {
+        if self.bytes.len() == 2 {
+            self.bytes[1]
+        } else {
+            0
+        }
+    }
+
+    fn get_offset(&self) -> i8 {
+        if self.bytes.len() == 2 {
+            self.bytes[1] as i8
+        } else {
+            0
+        }
+    }
+}
+
 impl Display for InstructionBytes<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let instruction_string = match self.instruction.mode {
             Absolute => {
-                format!(
-                    "${:04X?}",
-                    u16::from_le_bytes([self.bytes[1], self.bytes[2]])
-                )
+                format!("${:04X?}", self.get_address())
             }
             AbsoluteX => {
-                format!(
-                    "${:04X?},X",
-                    u16::from_le_bytes([self.bytes[1], self.bytes[2]])
-                )
+                format!("${:04X?},X", self.get_address())
             }
             AbsoluteY => {
-                format!(
-                    "${:04X?},Y",
-                    u16::from_le_bytes([self.bytes[1], self.bytes[2]])
-                )
+                format!("${:04X?},Y", self.get_address())
             }
             Immediate => {
-                format!("#${:02X?}", &self.bytes[1])
+                format!("#${:02X?}", self.get_immediate())
             }
             Indirect => {
-                format!(
-                    "(${:04X?})",
-                    u16::from_le_bytes([self.bytes[1], self.bytes[2]])
-                )
+                format!("(${:04X?})", self.get_address())
             }
             IndirectX => {
-                format!(
-                    "(${:04X?},X)",
-                    u16::from_le_bytes([self.bytes[1], self.bytes[2]])
-                )
+                format!("(${:04X?},X)", self.get_address())
             }
             IndirectY => {
-                format!(
-                    "(${:04X?}),Y",
-                    u16::from_le_bytes([self.bytes[1], self.bytes[2]])
-                )
+                format!("(${:04X?}),Y", self.get_address())
             }
             ZeroPage => {
-                format!("${:02X?}", &self.bytes[1])
+                format!("${:02X?}", self.get_immediate())
             }
             ZeroPageX => {
-                format!("${:02X?},X", &self.bytes[1])
+                format!("${:02X?},X", self.get_immediate())
             }
             ZeroPageY => {
-                format!("${:02X?},Y", &self.bytes[1])
+                format!("${:02X?},Y", self.get_immediate())
             }
-            _ => format!(""),
+            Relative => {
+                format!("~{:02X?}", self.get_immediate())
+            }
+            _ => "".to_string(),
         };
         let mut bytes_string = String::new();
         for b in &self.bytes {
             bytes_string.push_str(format!("{:02X} ", b).as_str())
         }
+        // TODO fix this hack
         write!(
             f,
             "{:<9} {:<4} {:<8}",
@@ -251,16 +263,23 @@ impl Cpu {
         self.p & flag as u8 == 0
     }
 
-    fn branch(&mut self, condition: bool) -> u16 {
+    fn branch(&mut self, b: InstructionBytes, condition: bool) -> u16 {
+        let new_pc = self.pc.wrapping_add(b.bytes.len() as u16);
+
         if condition {
-            self.get_operand(Relative)
+            let offset = b.get_offset();
+            if offset > 0 {
+                new_pc.wrapping_add(offset as u16)
+            } else {
+                new_pc.wrapping_sub(offset as u16)
+            }
         } else {
-            self.pc
+            new_pc
         }
     }
 
-    fn compare(&mut self, mode: AddressingMode, reg: u8) {
-        let op = (self.get_operand(mode) & 0xff) as u8;
+    fn compare(&mut self, b: InstructionBytes, reg: u8) {
+        let op = (self.get_operand(b) & 0xff) as u8;
         let result = reg.wrapping_sub(op);
         self.change_flag(Flag::Carry, reg >= op);
         self.set_zero_negative_flags(result);
@@ -281,15 +300,15 @@ impl Cpu {
         self.bus.read_u8(STACK_BYTE_HIGH | self.sp as u16)
     }
 
-    fn execute(&mut self, instruction: Instruction) {
-        let mut new_pc = self.pc.wrapping_add((instruction.length - 1) as u16);
-        match instruction.opcode {
+    fn execute(&mut self, b: InstructionBytes) {
+        let mut new_pc = self.pc.wrapping_add((b.instruction.length) as u16);
+        match b.instruction.opcode {
             Opcode::Nop => {}
 
             // http://www.righto.com/2012/12/the-6502-overflow-flag-explained.html
             Opcode::Adc => {
                 let carry: u8 = if self.is_flag_set(Flag::Carry) { 1 } else { 0 };
-                let operand = self.get_operand(instruction.mode) as u8;
+                let operand = self.get_operand(b) as u8;
                 let result = self.a.wrapping_add(operand.wrapping_add(carry));
                 self.change_flag(
                     Flag::Overflow,
@@ -300,11 +319,11 @@ impl Cpu {
             }
 
             Opcode::And => {
-                self.a = self.a & (self.get_operand(instruction.mode) as u8);
+                self.a &= self.get_operand(b) as u8;
                 self.set_zero_negative_flags(self.a)
             }
             Opcode::Asl => {
-                let op = self.get_operand(instruction.mode);
+                let op = self.get_operand(b);
                 self.a = op.rotate_left(1) as u8 & 0xfe;
                 if op & 0x80 != 0 {
                     self.set_flag(Flag::Carry);
@@ -314,28 +333,28 @@ impl Cpu {
                 self.set_zero_negative_flags(self.a);
             }
             Opcode::Bcc => {
-                new_pc = self.branch(self.is_flag_clear(Flag::Carry));
+                new_pc = self.branch(b, self.is_flag_clear(Flag::Carry));
             }
             Opcode::Bcs => {
-                new_pc = self.branch(self.is_flag_set(Flag::Carry));
+                new_pc = self.branch(b, self.is_flag_set(Flag::Carry));
             }
             Opcode::Bvc => {
-                new_pc = self.branch(self.is_flag_clear(Flag::Overflow));
+                new_pc = self.branch(b, self.is_flag_clear(Flag::Overflow));
             }
             Opcode::Bvs => {
-                new_pc = self.branch(self.is_flag_set(Flag::Overflow));
+                new_pc = self.branch(b, self.is_flag_set(Flag::Overflow));
             }
             Opcode::Bne => {
-                new_pc = self.branch(self.is_flag_clear(Flag::Zero));
+                new_pc = self.branch(b, self.is_flag_clear(Flag::Zero));
             }
             Opcode::Beq => {
-                new_pc = self.branch(self.is_flag_set(Flag::Zero));
+                new_pc = self.branch(b, self.is_flag_set(Flag::Zero));
             }
             Opcode::Bpl => {
-                new_pc = self.branch(self.is_flag_clear(Flag::Negative));
+                new_pc = self.branch(b, self.is_flag_clear(Flag::Negative));
             }
             Opcode::Bmi => {
-                new_pc = self.branch(self.is_flag_set(Flag::Negative));
+                new_pc = self.branch(b, self.is_flag_set(Flag::Negative));
             }
             Opcode::Clc => {
                 self.clear_flag(Flag::Carry);
@@ -359,7 +378,7 @@ impl Cpu {
                 self.set_flag(Flag::Decimal);
             }
             Opcode::Inc => {
-                let addr = self.get_operand_address(instruction.mode);
+                let addr = self.get_operand(b);
                 let value = self.bus.read_u8(addr).wrapping_add(1);
                 self.bus.write_u8(addr, value);
             }
@@ -372,7 +391,7 @@ impl Cpu {
                 self.set_zero_negative_flags(self.y);
             }
             Opcode::Bit => {
-                let result = self.a & self.get_operand(instruction.mode) as u8;
+                let result = self.a & self.get_operand(b) as u8;
                 self.set_zero_negative_flags(result);
                 self.change_flag(Flag::Overflow, result & 0x40 != 0);
                 // TODO write tests
@@ -386,7 +405,7 @@ impl Cpu {
                 // TODO write tests
             }
             Opcode::Jsr => {
-                let tgt_addr = self.get_operand(Absolute);
+                let tgt_addr = self.get_operand(b);
                 let ret_addr = self.pc - 1;
                 self.stack_push_u16(ret_addr);
                 println!("jsr target addr {:04X}", tgt_addr);
@@ -394,19 +413,19 @@ impl Cpu {
                 // TODO write tests
             }
             Opcode::Cmp => {
-                self.compare(instruction.mode, self.a);
+                self.compare(b, self.a);
                 // TODO write tests
             }
             Opcode::Cpx => {
-                self.compare(instruction.mode, self.x);
+                self.compare(b, self.x);
                 // TODO write tests
             }
             Opcode::Cpy => {
-                self.compare(instruction.mode, self.y);
+                self.compare(b, self.y);
                 // TODO write tests
             }
             Opcode::Dec => {
-                let addr = self.get_operand_address(instruction.mode);
+                let addr = self.get_operand(b);
                 let value = self.bus.read_u8(addr).wrapping_sub(1);
                 self.bus.write_u8(addr, value);
                 // TODO write tests
@@ -420,11 +439,11 @@ impl Cpu {
                 self.set_zero_negative_flags(self.y);
             }
             Opcode::Eor => {
-                self.a = self.a ^ (self.get_operand(instruction.mode) as u8);
+                self.a ^= self.get_operand(b) as u8;
                 self.set_zero_negative_flags(self.a);
             }
             Opcode::Ora => {
-                self.a = self.a | (self.get_operand(instruction.mode) as u8);
+                self.a |= self.get_operand(b) as u8;
                 self.set_zero_negative_flags(self.a);
             }
             Opcode::Pha => {
@@ -446,7 +465,7 @@ impl Cpu {
                 } else {
                     0x00
                 };
-                let op = self.get_operand(instruction.mode);
+                let op = self.get_operand(b);
                 if op & 0x80 != 0 {
                     self.set_flag(Flag::Carry);
                 } else {
@@ -461,7 +480,7 @@ impl Cpu {
                 } else {
                     0x00
                 };
-                let op = self.get_operand(instruction.mode);
+                let op = self.get_operand(b);
                 if op & 0x01 != 0 {
                     self.set_flag(Flag::Carry);
                 } else {
@@ -477,7 +496,7 @@ impl Cpu {
                 } else {
                     0
                 };
-                let operand = self.get_operand(instruction.mode) as u8;
+                let operand = self.get_operand(b) as u8;
                 let result = self.a.wrapping_sub(operand.wrapping_add(carry));
                 self.change_flag(
                     Flag::Overflow,
@@ -487,30 +506,30 @@ impl Cpu {
                 self.set_zero_negative_flags(self.a);
             }
             Opcode::Sta => {
-                let addr = self.get_operand_address(instruction.mode);
+                let addr = self.get_operand(b);
                 self.bus.write_u8(addr, self.a);
             }
 
             Opcode::Stx => {
-                let addr = self.get_operand_address(instruction.mode);
+                let addr = self.get_operand(b);
                 self.bus.write_u8(addr, self.x);
             }
 
             Opcode::Sty => {
-                let addr = self.get_operand_address(instruction.mode);
+                let addr = self.get_operand(b);
                 self.bus.write_u8(addr, self.y);
             }
 
             Opcode::Lda => {
-                self.a = self.get_operand(instruction.mode) as u8;
+                self.a = self.get_operand(b) as u8;
             }
 
             Opcode::Ldx => {
-                self.x = self.get_operand(instruction.mode) as u8;
+                self.x = self.get_operand(b) as u8;
             }
 
             Opcode::Ldy => {
-                self.y = self.get_operand(instruction.mode) as u8;
+                self.y = self.get_operand(b) as u8;
             }
 
             Opcode::Tax => {
@@ -539,53 +558,44 @@ impl Cpu {
             }
 
             Opcode::Jmp => {
-                new_pc = self.get_operand(instruction.mode);
-                println!("jmp! pc is now {:02X}", self.pc)
+                new_pc = self.get_operand(b);
+                println!("jmp to {}", new_pc)
             }
             _ => {
-                panic!("unimplemented opcode: {}", instruction.opcode);
+                panic!("unimplemented opcode: {}", b.instruction.opcode);
             }
         }
 
         self.pc = new_pc;
     }
 
-    /// Returns the address of the operand given the addressing mode. Some mods such as Immediate and Accumulator will return 0 as an invalid state
-    fn get_operand_address(&self, mode: AddressingMode) -> u16 {
-        match mode {
-            Immediate => self.pc,
-            ZeroPage => 0x0000 + self.bus.read_u8(self.pc) as u16,
-            ZeroPageX => 0x0000 + self.bus.read_u8(self.pc).wrapping_add(self.x) as u16,
-            ZeroPageY => 0x0000 + self.bus.read_u8(self.pc).wrapping_add(self.y) as u16,
-            Absolute => {
-                println!("absolute pc {:02X}", self.pc);
-                self.pc
-            }
-            AbsoluteX => self.pc.wrapping_add(self.x as u16),
-            AbsoluteY => self.pc.wrapping_add(self.y as u16),
-
-            Indirect => self.bus.read_u16(self.pc),
-            IndirectX => self.bus.read_u16(self.pc).wrapping_add(self.x as u16),
-            IndirectY => self.bus.read_u16(self.pc).wrapping_add(self.y as u16),
-            _ => 0,
-        }
-    }
-
-    /// Given the current state of the pc and addressing mode, this function will return the
-    /// appropriate operand.
-    /// reference: https://www.nesdev.org/wiki/CPU_addressing_modes
-    fn get_operand(&self, mode: AddressingMode) -> u16 {
-        match mode {
-            AddressingMode::Relative => {
-                let offset = self.bus.read_u8(self.pc) as i8;
-                if offset > 0 {
-                    self.pc.wrapping_add(offset as u16)
-                } else {
-                    self.pc.wrapping_sub(offset as u16)
-                }
-            }
+    /// get_operand returns either a value or address depending on mode
+    /// references:
+    /// https://www.nesdev.org/wiki/CPU_addressing_modes
+    /// http://www.emulator101.com/6502-addressing-modes.html
+    fn get_operand(&self, b: InstructionBytes) -> u16 {
+        match b.instruction.mode {
+            Immediate => b.get_immediate() as u16,
             Accumulator => self.a as u16,
-            _ => self.bus.read_u16(self.get_operand_address(mode)),
+
+            ZeroPage => b.get_immediate() as u16,
+            ZeroPageX => b.get_immediate().wrapping_add(self.x) as u16,
+            ZeroPageY => b.get_immediate().wrapping_add(self.y) as u16,
+
+            Absolute => b.get_address(),
+            AbsoluteX => b.get_address().wrapping_add(self.x as u16),
+            AbsoluteY => b.get_address().wrapping_add(self.y as u16),
+
+            Indirect => self.bus.read_u16(b.get_address()),
+            IndirectX => self
+                .bus
+                .read_u16(b.get_address())
+                .wrapping_add(self.x as u16),
+            IndirectY => self
+                .bus
+                .read_u16(b.get_address())
+                .wrapping_add(self.y as u16),
+            _ => panic!("get_operand not supported for {:?}", b.instruction.mode),
         }
     }
 
@@ -728,7 +738,7 @@ impl Cpu {
             // Branch instructions
             0x90 => Instruction {
                 opcode: Opcode::Bcc,
-                mode: Implied,
+                mode: Relative,
                 length: 2,
                 cycles: 2,
             },
@@ -1506,6 +1516,8 @@ impl Cpu {
         self.a = 0;
         self.x = 0;
         self.p = 0;
+        // FIXME self.p = 0x24;
+
         self.pc = 0xc000;
         println!(
             "\x1b[94m{:04X}\x1b[0m \x1b[91m{:<23}\x1b[0m {}",
@@ -1526,8 +1538,7 @@ impl Cpu {
             "\x1b[94m{:04X}\x1b[0m \x1b[93m{}\x1b[0m {}",
             self.pc, instruction_bytes, self
         );
-        self.pc = self.pc.wrapping_add(1);
-        self.execute(instruction);
+        self.execute(instruction_bytes);
     }
 }
 
@@ -1580,8 +1591,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case(vec![0x10, 0x10], 0b1000_0000, 0x8002)]
-    #[case(vec![0x10, 0x10], 0b0000_0000, 0x8012)]
+    #[case(vec![0x10, 0x10], 0b1000_0000, 0xc002)]
+    #[case(vec![0x10, 0x10], 0b0000_0000, 0xc012)]
     fn test_branches(#[case] in_prg: Vec<u8>, #[case] in_flags: u8, #[case] ex_pc: u16) {
         let mut cpu = setup_cpu(test_program(in_prg));
         cpu.reset();
