@@ -11,6 +11,7 @@ use crate::cpu::AddressingMode::{
     IndirectY, Relative, ZeroPage, ZeroPageX, ZeroPageY,
 };
 use crate::cpu::Flag::Zero;
+use log::debug;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Add;
 
@@ -193,18 +194,18 @@ impl Display for InstructionBytes<'_> {
         };
         let mut bytes_string = String::new();
         for b in &self.bytes {
-            bytes_string.push_str(format!("{:02X} ", b).as_str())
+            bytes_string.push_str(format!("{:02X}", b).as_str())
         }
         // TODO fix this hack
         write!(
             f,
-            "{:<9} {:<4} {:<8}",
-            bytes_string.replace("[", "").replace("]", ""),
+            "{:<9} {:<3} {:<8}",
+            bytes_string.replace('[', "").replace(']', ""),
             self.instruction.opcode.to_string().to_ascii_uppercase(),
             instruction_string
-                .replace("[", "")
-                .replace("]", "")
-                .replace(",", "")
+                .replace('[', "")
+                .replace(']', "")
+                .replace(',', "")
         )?;
         Ok(())
     }
@@ -408,7 +409,7 @@ impl Cpu {
                 let tgt_addr = self.get_operand(b);
                 let ret_addr = self.pc - 1;
                 self.stack_push_u16(ret_addr);
-                println!("jsr target addr {:04X}", tgt_addr);
+                debug!("jsr target addr {:04X}", tgt_addr);
                 new_pc = tgt_addr;
                 // TODO write tests
             }
@@ -559,7 +560,7 @@ impl Cpu {
 
             Opcode::Jmp => {
                 new_pc = self.get_operand(b);
-                println!("jmp to {}", new_pc)
+                debug!("jmp to {}", new_pc)
             }
             _ => {
                 panic!("unimplemented opcode: {}", b.instruction.opcode);
@@ -1515,12 +1516,10 @@ impl Cpu {
     pub fn reset(&mut self) {
         self.a = 0;
         self.x = 0;
-        self.p = 0;
-        // FIXME self.p = 0x24;
-
+        self.p = 0x24;
         self.pc = 0xc000;
         println!(
-            "\x1b[94m{:04X}\x1b[0m \x1b[91m{:<23}\x1b[0m {}",
+            "\x1b[94m  {:04X} \x1b[0m \x1b[91m{:<23}\x1b[0m {}",
             self.pc, "RESET", self
         )
     }
@@ -1535,7 +1534,7 @@ impl Cpu {
         self.cycles = self.cycles.wrapping_add(instruction.cycles as u64);
 
         println!(
-            "\x1b[94m{:04X}\x1b[0m \x1b[93m{}\x1b[0m {}",
+            "\x1b[94m  {:04X} \x1b[0m \x1b[93m{}\x1b[0m {}",
             self.pc, instruction_bytes, self
         );
         self.execute(instruction_bytes);
@@ -1572,10 +1571,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case(vec![0x09, 0x40], 0x84, 0xc4, 0b10000000)]
-    #[case(vec![0x09, 0x00], 0x00, 0x00, 0b00000010)]
-    #[case(vec![0x29, 0xf0], 0x80, 0x80, 0b10000000)]
-    #[case(vec![0x49, 0xf0], 0x0f, 0xff, 0b10000000)]
+    #[case(vec![0x09, 0x40], 0x84, 0xc4, 0b1010_0100)]
+    #[case(vec![0x09, 0x00], 0x00, 0x00, 0b0010_0110)]
+    #[case(vec![0x29, 0xf0], 0x80, 0x80, 0b1010_0100)]
+    #[case(vec![0x49, 0xf0], 0x0f, 0xff, 0b1010_0100)]
     fn test_accumulator_ops(
         #[case] in_prg: Vec<u8>,
         #[case] in_a: u8,
@@ -1684,8 +1683,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case(vec![0xca], 0xff, 0, 0xfe, 0, 0b10000000)]
-    #[case(vec![0x88], 0xa0, 0x05, 0xa0, 0x04, 0b00000000)]
+    #[case(vec![0xca], 0xff, 0, 0xfe, 0, 0b1010_0100)]
+    #[case(vec![0x88], 0xa0, 0x05, 0xa0, 0x04, 0b0010_0100)]
     fn test_decs(
         #[case] in_prg: Vec<u8>,
         #[case] in_x: u8,

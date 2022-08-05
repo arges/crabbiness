@@ -16,6 +16,9 @@ mod rom;
 
 #[macroquad::main("crabbiness")]
 async fn main() {
+    // setup logger
+    env_logger::init();
+
     // load rom from disk
     let mut file = fs::File::open("nestest.nes").unwrap();
     let mut data: Vec<u8> = Vec::new();
