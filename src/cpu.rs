@@ -194,7 +194,7 @@ impl Display for InstructionBytes<'_> {
         };
         let mut bytes_string = String::new();
         for b in &self.bytes {
-            bytes_string.push_str(format!("{:02X}", b).as_str())
+            bytes_string.push_str(format!("{:02X} ", b).as_str())
         }
         // TODO fix this hack
         write!(
@@ -232,12 +232,8 @@ impl Cpu {
     }
 
     fn set_zero_negative_flags(&mut self, value: u8) {
-        if value == 0 {
-            self.p |= Flag::Zero as u8
-        };
-        if (value & 0x80) > 0 {
-            self.p |= Flag::Negative as u8
-        }
+        self.change_flag(Flag::Zero, value == 0);
+        self.change_flag(Flag::Negative, (value & 0x80) > 0);
     }
 
     fn clear_flag(&mut self, flag: Flag) {
@@ -287,6 +283,7 @@ impl Cpu {
     }
 
     fn stack_push_u8(&mut self, value: u8) {
+        debug!("push u8 @ {:02X} <- {:02X}", self.sp, value);
         self.bus.write_u8(STACK_BYTE_HIGH | self.sp as u16, value);
         self.sp = self.sp.wrapping_sub(1);
     }
@@ -296,9 +293,15 @@ impl Cpu {
         self.stack_push_u8(((value & 0xff00) >> 8) as u8);
     }
 
-    fn stack_pop(&mut self) -> u8 {
+    fn stack_pop_u8(&mut self) -> u8 {
         self.sp = self.sp.wrapping_add(1);
-        self.bus.read_u8(STACK_BYTE_HIGH | self.sp as u16)
+        let val = self.bus.read_u8(STACK_BYTE_HIGH | self.sp as u16);
+        debug!(" pop u8 @ {:02X} -> {:02X}", self.sp, val);
+        val
+    }
+
+    fn stack_pop_u16(&mut self) -> u16 {
+        ((self.stack_pop_u8() as u16) << 8) | self.stack_pop_u8() as u16
     }
 
     fn execute(&mut self, b: InstructionBytes) {
@@ -392,7 +395,9 @@ impl Cpu {
                 self.set_zero_negative_flags(self.y);
             }
             Opcode::Bit => {
-                let result = self.a & self.get_operand(b) as u8;
+                let operand = self.bus.read_u8(self.get_operand(b) as u16);
+                let result = self.a & operand;
+                debug!("bit: result is {:02X} operand is {:02X}", result, operand);
                 self.set_zero_negative_flags(result);
                 self.change_flag(Flag::Overflow, result & 0x40 != 0);
                 // TODO write tests
@@ -405,14 +410,25 @@ impl Cpu {
                 self.pc = self.bus.read_u16(0xfffe);
                 // TODO write tests
             }
+            Opcode::Rti => {
+                self.p = self.stack_pop_u8();
+                self.pc = self.stack_pop_u16();
+                // TODO write tests
+            }
             Opcode::Jsr => {
                 let tgt_addr = self.get_operand(b);
-                let ret_addr = self.pc - 1;
+                let ret_addr = self.pc.wrapping_sub(1);
                 self.stack_push_u16(ret_addr);
-                debug!("jsr target addr {:04X}", tgt_addr);
+                debug!("jsr tgt_addr {:04X} ret_addr {:04X}", tgt_addr, ret_addr);
                 new_pc = tgt_addr;
                 // TODO write tests
             }
+            Opcode::Rts => {
+                new_pc = self.stack_pop_u16().wrapping_add(1);
+                debug!("rts new_pc {:04X}", new_pc);
+                // TODO write tests
+            }
+
             Opcode::Cmp => {
                 self.compare(b, self.a);
                 // TODO write tests
@@ -454,11 +470,11 @@ impl Cpu {
                 self.stack_push_u8(self.p);
             }
             Opcode::Pla => {
-                self.a = self.stack_pop();
+                self.a = self.stack_pop_u8();
                 self.set_zero_negative_flags(self.a);
             }
             Opcode::Plp => {
-                self.p = self.stack_pop();
+                self.p = self.stack_pop_u8();
             }
             Opcode::Rol => {
                 let carry_in = if self.p & (Flag::Carry as u8) != 0 {
@@ -523,14 +539,17 @@ impl Cpu {
 
             Opcode::Lda => {
                 self.a = self.get_operand(b) as u8;
+                self.set_zero_negative_flags(self.a);
             }
 
             Opcode::Ldx => {
                 self.x = self.get_operand(b) as u8;
+                self.set_zero_negative_flags(self.x);
             }
 
             Opcode::Ldy => {
                 self.y = self.get_operand(b) as u8;
+                self.set_zero_negative_flags(self.y);
             }
 
             Opcode::Tax => {
@@ -560,7 +579,7 @@ impl Cpu {
 
             Opcode::Jmp => {
                 new_pc = self.get_operand(b);
-                debug!("jmp to {}", new_pc)
+                debug!("jmp to {:02X}", new_pc)
             }
             _ => {
                 panic!("unimplemented opcode: {}", b.instruction.opcode);
@@ -769,6 +788,18 @@ impl Cpu {
             },
             0x10 => Instruction {
                 opcode: Opcode::Bpl,
+                mode: Relative,
+                length: 2,
+                cycles: 2,
+            },
+            0x70 => Instruction {
+                opcode: Opcode::Bvs,
+                mode: Relative,
+                length: 2,
+                cycles: 2,
+            },
+            0x50 => Instruction {
+                opcode: Opcode::Bvc,
                 mode: Relative,
                 length: 2,
                 cycles: 2,
@@ -1504,6 +1535,18 @@ impl Cpu {
                 length: 3,
                 cycles: 6,
             },
+            0x60 => Instruction {
+                opcode: Opcode::Rts,
+                mode: Implied,
+                length: 1,
+                cycles: 6,
+            },
+            0x40 => Instruction {
+                opcode: Opcode::Rti,
+                mode: Implied,
+                length: 1,
+                cycles: 6,
+            },
             _ => Instruction {
                 opcode: Opcode::Nop,
                 mode: Implied,
@@ -1514,10 +1557,12 @@ impl Cpu {
     }
 
     pub fn reset(&mut self) {
+        // https://www.nesdev.org/wiki/CPU_power_up_state
         self.a = 0;
         self.x = 0;
         self.p = 0x24;
         self.pc = 0xc000;
+        self.sp = 0xfd;
         println!(
             "\x1b[94m  {:04X} \x1b[0m \x1b[91m{:<23}\x1b[0m {}",
             self.pc, "RESET", self
@@ -1533,10 +1578,7 @@ impl Cpu {
 
         self.cycles = self.cycles.wrapping_add(instruction.cycles as u64);
 
-        println!(
-            "\x1b[94m  {:04X} \x1b[0m \x1b[93m{}\x1b[0m {}",
-            self.pc, instruction_bytes, self
-        );
+        println!("  {:04X}  {}\t\t\t{}", self.pc, instruction_bytes, self);
         self.execute(instruction_bytes);
     }
 }
@@ -1545,7 +1587,7 @@ impl Display for Cpu {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
-            "A:{:04X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} CYC:{}",
+            "A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} CYC:{}",
             self.a, self.x, self.y, self.p, self.sp, self.cycles
         )
     }
@@ -1649,6 +1691,20 @@ mod tests {
         cpu.step();
         assert_eq!(cpu.p, 0b1010_0101);
         assert_eq!(cpu.sp, 0xff);
+    }
+
+    #[test]
+    fn test_stack() {
+        let mut cpu = setup_cpu(test_program(vec![]));
+        cpu.reset();
+        cpu.stack_push_u8(0xda);
+        assert_eq!(cpu.bus.read_u8(0x01fd), 0xda);
+        let val = cpu.stack_pop_u8();
+        assert_eq!(val, 0xda);
+        cpu.stack_push_u16(0xda5c);
+        assert_eq!(cpu.bus.read_u16(0x01fc), 0x5cda);
+        let val = cpu.stack_pop_u16();
+        assert_eq!(val, 0xda5c);
     }
 
     #[rstest]

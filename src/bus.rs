@@ -1,5 +1,6 @@
 use crate::ppu::Ppu;
 use crate::rom::Rom;
+use log::debug;
 use std::borrow::Borrow;
 
 pub struct Bus {
@@ -40,7 +41,7 @@ impl Bus {
     pub fn write_u8(&mut self, address: u16, data: u8) {
         match address {
             0x0000..=0x1fff => {
-                //println!("writing {:02x} into {:04x}", data, address);
+                //debug!("writing {:02x} @ {:04x}", data, address);
                 self.ram[address as usize % 0x0800] = data
             }
             0x2000 => self.ppu.write_ppuctrl(data),
