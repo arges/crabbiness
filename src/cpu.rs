@@ -36,7 +36,7 @@ pub struct Cpu {
     sp: u8,
     p: u8,
     cycles: u64,
-    bus: Bus,
+    pub bus: Bus,
 }
 
 #[derive(Debug)]
@@ -173,10 +173,10 @@ impl Display for InstructionBytes<'_> {
                 format!("(${:04X?})", self.get_address())
             }
             IndirectX => {
-                format!("(${:04X?},X)", self.get_address())
+                format!("(${:02X?},X)", self.get_immediate())
             }
             IndirectY => {
-                format!("(${:04X?}),Y", self.get_address())
+                format!("(${:02X?}),Y", self.get_immediate())
             }
             ZeroPage => {
                 format!("${:02X?}", self.get_immediate())
@@ -203,9 +203,6 @@ impl Display for InstructionBytes<'_> {
             bytes_string.replace('[', "").replace(']', ""),
             self.instruction.opcode.to_string().to_ascii_uppercase(),
             instruction_string
-                .replace('[', "")
-                .replace(']', "")
-                .replace(',', "")
         )?;
         Ok(())
     }
@@ -275,8 +272,13 @@ impl Cpu {
         }
     }
 
+    fn shift_left(&mut self, input: u8) -> (u8, bool) {
+        (input >> 1, input & 1 == 1)
+    }
+
     fn compare(&mut self, b: InstructionBytes, reg: u8) {
-        let op = (self.get_operand(b) & 0xff) as u8;
+        let op = self.get_operand(b) as u8;
+        debug!("compare op {:02X} reg {:02X}", op, reg);
         let result = reg.wrapping_sub(op);
         self.change_flag(Flag::Carry, reg >= op);
         self.set_zero_negative_flags(result);
@@ -289,8 +291,8 @@ impl Cpu {
     }
 
     fn stack_push_u16(&mut self, value: u16) {
-        self.stack_push_u8((value & 0xff) as u8);
         self.stack_push_u8(((value & 0xff00) >> 8) as u8);
+        self.stack_push_u8((value & 0xff) as u8);
     }
 
     fn stack_pop_u8(&mut self) -> u8 {
@@ -301,7 +303,22 @@ impl Cpu {
     }
 
     fn stack_pop_u16(&mut self) -> u16 {
-        ((self.stack_pop_u8() as u16) << 8) | self.stack_pop_u8() as u16
+        let lsb = self.stack_pop_u8() as u16;
+        let msb = self.stack_pop_u8() as u16;
+        (msb << 8) | lsb
+    }
+
+    fn add_to_a(&mut self, operand: u8) {
+        let carry: u8 = if self.is_flag_set(Flag::Carry) { 1 } else { 0 };
+        let result: u16 = self.a as u16 + operand as u16 + carry as u16;
+
+        self.change_flag(Flag::Carry, result > 0xff);
+        self.change_flag(
+            Flag::Overflow,
+            (operand ^ result as u8) & (self.a ^ result as u8) & 0x80 != 0,
+        );
+        self.a = result as u8;
+        self.set_zero_negative_flags(self.a);
     }
 
     fn execute(&mut self, b: InstructionBytes) {
@@ -311,15 +328,8 @@ impl Cpu {
 
             // http://www.righto.com/2012/12/the-6502-overflow-flag-explained.html
             Opcode::Adc => {
-                let carry: u8 = if self.is_flag_set(Flag::Carry) { 1 } else { 0 };
                 let operand = self.get_operand(b) as u8;
-                let result = self.a.wrapping_add(operand.wrapping_add(carry));
-                self.change_flag(
-                    Flag::Overflow,
-                    (operand ^ result) & (self.a ^ result) & 0x80 != 0,
-                );
-                self.a = result;
-                self.set_zero_negative_flags(self.a);
+                self.add_to_a(operand)
             }
 
             Opcode::And => {
@@ -382,7 +392,7 @@ impl Cpu {
                 self.set_flag(Flag::Decimal);
             }
             Opcode::Inc => {
-                let addr = self.get_operand(b);
+                let addr = self.get_operand_address(b);
                 let value = self.bus.read_u8(addr).wrapping_add(1);
                 self.bus.write_u8(addr, value);
             }
@@ -395,12 +405,12 @@ impl Cpu {
                 self.set_zero_negative_flags(self.y);
             }
             Opcode::Bit => {
-                let operand = self.bus.read_u8(self.get_operand(b) as u16);
+                let operand = self.get_operand(b) as u8;
                 let result = self.a & operand;
+                self.change_flag(Flag::Zero, result == 0);
+                self.change_flag(Flag::Negative, operand & 0x80 != 0);
+                self.change_flag(Flag::Overflow, operand & 0x40 != 0);
                 debug!("bit: result is {:02X} operand is {:02X}", result, operand);
-                self.set_zero_negative_flags(result);
-                self.change_flag(Flag::Overflow, result & 0x40 != 0);
-                // TODO write tests
             }
             Opcode::Brk => {
                 self.pc = self.pc.wrapping_add(1);
@@ -413,11 +423,13 @@ impl Cpu {
             Opcode::Rti => {
                 self.p = self.stack_pop_u8();
                 self.pc = self.stack_pop_u16();
+                self.clear_flag(Flag::Break);
+                self.set_flag(Flag::Unused);
                 // TODO write tests
             }
             Opcode::Jsr => {
-                let tgt_addr = self.get_operand(b);
-                let ret_addr = self.pc.wrapping_sub(1);
+                let tgt_addr = self.get_operand_address(b);
+                let ret_addr = self.pc.wrapping_add(2);
                 self.stack_push_u16(ret_addr);
                 debug!("jsr tgt_addr {:04X} ret_addr {:04X}", tgt_addr, ret_addr);
                 new_pc = tgt_addr;
@@ -442,7 +454,7 @@ impl Cpu {
                 // TODO write tests
             }
             Opcode::Dec => {
-                let addr = self.get_operand(b);
+                let addr = self.get_operand_address(b);
                 let value = self.bus.read_u8(addr).wrapping_sub(1);
                 self.bus.write_u8(addr, value);
                 // TODO write tests
@@ -467,7 +479,7 @@ impl Cpu {
                 self.stack_push_u8(self.a);
             }
             Opcode::Php => {
-                self.stack_push_u8(self.p);
+                self.stack_push_u8(self.p | Flag::Break as u8 | Flag::Unused as u8);
             }
             Opcode::Pla => {
                 self.a = self.stack_pop_u8();
@@ -475,6 +487,8 @@ impl Cpu {
             }
             Opcode::Plp => {
                 self.p = self.stack_pop_u8();
+                self.clear_flag(Flag::Break);
+                self.set_flag(Flag::Unused)
             }
             Opcode::Rol => {
                 let carry_in = if self.p & (Flag::Carry as u8) != 0 {
@@ -508,48 +522,61 @@ impl Cpu {
             }
 
             Opcode::Sbc => {
-                let carry: u8 = if self.is_flag_clear(Flag::Carry) {
-                    1
-                } else {
-                    0
-                };
                 let operand = self.get_operand(b) as u8;
-                let result = self.a.wrapping_sub(operand.wrapping_add(carry));
-                self.change_flag(
-                    Flag::Overflow,
-                    (operand ^ result) & (self.a ^ result) & 0x80 != 0,
-                );
-                self.a = result;
-                self.set_zero_negative_flags(self.a);
+                let value = ((operand as i8).wrapping_neg().wrapping_sub(1)) as u8;
+                self.add_to_a(value)
             }
             Opcode::Sta => {
-                let addr = self.get_operand(b);
+                let addr = self.get_operand_address(b);
+                debug!("STA a {:02x} into {:04x}", self.a, addr);
                 self.bus.write_u8(addr, self.a);
             }
 
             Opcode::Stx => {
-                let addr = self.get_operand(b);
+                let addr = self.get_operand_address(b);
                 self.bus.write_u8(addr, self.x);
             }
 
             Opcode::Sty => {
-                let addr = self.get_operand(b);
+                let addr = self.get_operand_address(b);
                 self.bus.write_u8(addr, self.y);
             }
 
             Opcode::Lda => {
                 self.a = self.get_operand(b) as u8;
+                debug!("LDA a is {:02x}", self.a);
                 self.set_zero_negative_flags(self.a);
             }
 
             Opcode::Ldx => {
                 self.x = self.get_operand(b) as u8;
+                debug!("LDX x is {:02x}", self.x);
                 self.set_zero_negative_flags(self.x);
             }
 
             Opcode::Ldy => {
                 self.y = self.get_operand(b) as u8;
                 self.set_zero_negative_flags(self.y);
+            }
+
+            Opcode::Lsr => {
+                let (result, carry_bit) = match b.instruction.mode {
+                    Accumulator => {
+                        let (result, carry_bit) = self.shift_left(self.a);
+                        self.a = result;
+                        (result, carry_bit)
+                    }
+                    _ => {
+                        let addr = self.get_operand_address(b);
+                        let value = self.bus.read_u8(addr);
+                        let (result, carry_bit) = self.shift_left(value);
+                        self.bus.write_u8(addr, result);
+                        (result, carry_bit)
+                    }
+                };
+
+                self.change_flag(Flag::Carry, carry_bit);
+                self.set_zero_negative_flags(result);
             }
 
             Opcode::Tax => {
@@ -570,7 +597,6 @@ impl Cpu {
             }
             Opcode::Txs => {
                 self.sp = self.x;
-                self.set_zero_negative_flags(self.sp);
             }
             Opcode::Tya => {
                 self.a = self.y;
@@ -578,26 +604,33 @@ impl Cpu {
             }
 
             Opcode::Jmp => {
-                new_pc = self.get_operand(b);
+                new_pc = self.get_operand_address(b);
                 debug!("jmp to {:02X}", new_pc)
-            }
-            _ => {
-                panic!("unimplemented opcode: {}", b.instruction.opcode);
             }
         }
 
         self.pc = new_pc;
     }
 
+    fn get_operand(&mut self, b: InstructionBytes) -> u16 {
+        match b.instruction.mode {
+            Immediate => b.get_immediate() as u16,
+            Accumulator => self.a as u16,
+            _ => {
+                let addr = self.get_operand_address(b);
+                let value = self.bus.read_u8(addr) as u16;
+                debug!("get operand @ {:04x} = {:02x}", addr, value);
+                value
+            }
+        }
+    }
+
     /// get_operand returns either a value or address depending on mode
     /// references:
     /// https://www.nesdev.org/wiki/CPU_addressing_modes
     /// http://www.emulator101.com/6502-addressing-modes.html
-    fn get_operand(&self, b: InstructionBytes) -> u16 {
+    fn get_operand_address(&mut self, b: InstructionBytes) -> u16 {
         match b.instruction.mode {
-            Immediate => b.get_immediate() as u16,
-            Accumulator => self.a as u16,
-
             ZeroPage => b.get_immediate() as u16,
             ZeroPageX => b.get_immediate().wrapping_add(self.x) as u16,
             ZeroPageY => b.get_immediate().wrapping_add(self.y) as u16,
@@ -609,11 +642,10 @@ impl Cpu {
             Indirect => self.bus.read_u16(b.get_address()),
             IndirectX => self
                 .bus
-                .read_u16(b.get_address())
-                .wrapping_add(self.x as u16),
+                .read_u16(b.get_immediate().wrapping_add(self.x) as u16),
             IndirectY => self
                 .bus
-                .read_u16(b.get_address())
+                .read_u16(b.get_immediate() as u16)
                 .wrapping_add(self.y as u16),
             _ => panic!("get_operand not supported for {:?}", b.instruction.mode),
         }
@@ -1142,7 +1174,7 @@ impl Cpu {
                 length: 3,
                 cycles: 4,
             },
-            0xA1 => Instruction {
+            0xa1 => Instruction {
                 opcode: Opcode::Lda,
                 mode: IndirectX,
                 length: 2,
@@ -1547,6 +1579,38 @@ impl Cpu {
                 length: 1,
                 cycles: 6,
             },
+
+            0x4a => Instruction {
+                opcode: Opcode::Lsr,
+                mode: Accumulator,
+                length: 1,
+                cycles: 2,
+            },
+            0x46 => Instruction {
+                opcode: Opcode::Lsr,
+                mode: ZeroPage,
+                length: 2,
+                cycles: 5,
+            },
+            0x56 => Instruction {
+                opcode: Opcode::Lsr,
+                mode: ZeroPageX,
+                length: 2,
+                cycles: 6,
+            },
+            0x4e => Instruction {
+                opcode: Opcode::Lsr,
+                mode: Absolute,
+                length: 3,
+                cycles: 6,
+            },
+            0x5e => Instruction {
+                opcode: Opcode::Lsr,
+                mode: AbsoluteX,
+                length: 3,
+                cycles: 7,
+            },
+
             _ => Instruction {
                 opcode: Opcode::Nop,
                 mode: Implied,
@@ -1563,14 +1627,15 @@ impl Cpu {
         self.p = 0x24;
         self.pc = 0xc000;
         self.sp = 0xfd;
-        println!(
+        debug!(
             "\x1b[94m  {:04X} \x1b[0m \x1b[91m{:<23}\x1b[0m {}",
             self.pc, "RESET", self
         )
     }
 
     pub fn step(&mut self) {
-        let instruction = self.decode(self.bus.read_u8(self.pc));
+        let op = self.bus.read_u8(self.pc);
+        let instruction = self.decode(op);
         let instruction_bytes = InstructionBytes {
             instruction: &instruction,
             bytes: self.bus.read_bytes(self.pc, instruction.length),
@@ -1578,7 +1643,7 @@ impl Cpu {
 
         self.cycles = self.cycles.wrapping_add(instruction.cycles as u64);
 
-        println!("  {:04X}  {}\t\t\t{}", self.pc, instruction_bytes, self);
+        println!("{:04X}  {}\t\t\t{}", self.pc, instruction_bytes, self);
         self.execute(instruction_bytes);
     }
 }
@@ -1587,8 +1652,8 @@ impl Display for Cpu {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
-            "A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} CYC:{}",
-            self.a, self.x, self.y, self.p, self.sp, self.cycles
+            "A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X}",
+            self.a, self.x, self.y, self.p, self.sp
         )
     }
 }
@@ -1632,13 +1697,21 @@ mod tests {
     }
 
     #[rstest]
-    #[case(vec![0x10, 0x10], 0b1000_0000, 0xc002)]
-    #[case(vec![0x10, 0x10], 0b0000_0000, 0xc012)]
-    fn test_branches(#[case] in_prg: Vec<u8>, #[case] in_flags: u8, #[case] ex_pc: u16) {
+    #[case(vec![0x10, 0x10], 0b1000_0000, 0b1000_0000, 0xc002)]
+    #[case(vec![0x10, 0x10], 0b0000_0000, 0b0000_0000, 0xc012)]
+    #[case(vec![0xf0, 0x32], 0b11101111, 0b11101111, 0xc034)]
+
+    fn test_branches(
+        #[case] in_prg: Vec<u8>,
+        #[case] in_flags: u8,
+        #[case] ex_flags: u8,
+        #[case] ex_pc: u16,
+    ) {
         let mut cpu = setup_cpu(test_program(in_prg));
         cpu.reset();
         cpu.p = in_flags;
         cpu.step();
+        assert_eq!(cpu.p, ex_flags);
         assert_eq!(cpu.pc, ex_pc);
     }
 
@@ -1657,7 +1730,7 @@ mod tests {
 
     #[rstest]
     #[case(vec![0x4C, 0x5a, 0xa5], 0xa55a)]
-    #[case(vec![0x6c, 0x03, 0x80, 0x5a, 0xa5], 0xa55a)]
+    #[case(vec![0x6c, 0x03, 0x80, 0xa5, 0x5a], 0xa55a)]
     fn test_jmp(#[case] in_prg: Vec<u8>, #[case] ex_pc: u16) {
         let mut cpu = setup_cpu(test_program(in_prg));
         cpu.reset();
@@ -1701,10 +1774,10 @@ mod tests {
         assert_eq!(cpu.bus.read_u8(0x01fd), 0xda);
         let val = cpu.stack_pop_u8();
         assert_eq!(val, 0xda);
-        cpu.stack_push_u16(0xda5c);
-        assert_eq!(cpu.bus.read_u16(0x01fc), 0x5cda);
+        cpu.stack_push_u16(0x5cda);
+        assert_eq!(cpu.bus.read_u16(0x01fc), 0xda5c);
         let val = cpu.stack_pop_u16();
-        assert_eq!(val, 0xda5c);
+        assert_eq!(val, 0x5cda);
     }
 
     #[rstest]
@@ -1787,6 +1860,8 @@ mod tests {
     #[case(vec![0x69, 0x0f], 0xf0, 0b00000001, 0x00, 0b00000011)]
     #[case(vec![0x69, 0x50], 0x50, 0b00000000, 0xa0, 0b11000000)]
     #[case(vec![0xe9, 0x50], 0x50, 0b00000001, 0x00, 0b00000011)]
+    #[case(vec![0xe9, 0x41], 0x40, 0b11100101, 0xff, 0b10100100)]
+
     fn test_carries(
         #[case] in_prg: Vec<u8>,
         #[case] in_a: u8,
@@ -1797,6 +1872,71 @@ mod tests {
         let mut cpu = setup_cpu(test_program(in_prg));
         cpu.reset();
         cpu.a = in_a;
+        cpu.p = in_flags;
+        cpu.step();
+        assert_eq!(cpu.a, ex_a);
+        assert_eq!(cpu.p, ex_flags);
+    }
+
+    #[rstest]
+    #[case(vec![0x2c, 0x03, 0xc0, 0xf0], 0xf0, 0b00000000, 0xf0, 0b11000000)]
+    #[case(vec![0x2c, 0x03, 0xc0, 0x00], 0xf0, 0b00000000, 0xf0, 0b00000010)]
+    fn test_bit(
+        #[case] in_prg: Vec<u8>,
+        #[case] in_a: u8,
+        #[case] in_flags: u8,
+        #[case] ex_a: u8,
+        #[case] ex_flags: u8,
+    ) {
+        let mut cpu = setup_cpu(test_program(in_prg));
+        cpu.reset();
+        cpu.a = in_a;
+        cpu.p = in_flags;
+        cpu.step();
+        assert_eq!(cpu.a, ex_a);
+        assert_eq!(cpu.p, ex_flags);
+    }
+
+    #[rstest]
+    #[case(vec![0x4a], 0xff, 0b00000000, 0x7f, 0b00000001)]
+    #[case(vec![0x4a], 0x80, 0b00000000, 0x40, 0b00000000)]
+    fn test_lsr(
+        #[case] in_prg: Vec<u8>,
+        #[case] in_a: u8,
+        #[case] in_flags: u8,
+        #[case] ex_a: u8,
+        #[case] ex_flags: u8,
+    ) {
+        let mut cpu = setup_cpu(test_program(in_prg));
+        cpu.reset();
+        cpu.a = in_a;
+        cpu.p = in_flags;
+        cpu.step();
+        assert_eq!(cpu.a, ex_a);
+        assert_eq!(cpu.p, ex_flags);
+    }
+
+    #[rstest]
+    //    #[case(vec![0xa5,0xff], vec![(0x00ff, 0x5a)], 0xff, 0xff, 0b00000000, 0x5a, 0b00000000)]
+    //   #[case(vec![0xb5,0xef], vec![(0x00ff, 0x5a)], 0xff, 0x10, 0b00000000, 0x5a, 0b00000000)]
+    //  #[case(vec![0xad,0x23,0x01], vec![(0x0123, 0x77)], 0xff, 0x10, 0b00000000, 0x77, 0b00000000)]
+    #[case(vec![0xa1,0x10], vec![(0x0020, 0x01),(0x0021,0x23),(0x0123,0x5a)], 0xff, 0x10, 0b00000000, 0x5a, 0b00000000)]
+    fn test_lda(
+        #[case] in_prg: Vec<u8>,
+        #[case] memory: Vec<(u16, u8)>,
+        #[case] in_a: u8,
+        #[case] in_x: u8,
+        #[case] in_flags: u8,
+        #[case] ex_a: u8,
+        #[case] ex_flags: u8,
+    ) {
+        let mut cpu = setup_cpu(test_program(in_prg));
+        cpu.reset();
+        cpu.a = in_a;
+        cpu.x = in_x;
+        for (addr, mem) in memory {
+            cpu.bus.write_u8(addr, mem);
+        }
         cpu.p = in_flags;
         cpu.step();
         assert_eq!(cpu.a, ex_a);

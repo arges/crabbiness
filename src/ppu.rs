@@ -3,12 +3,12 @@ use bitflags::bitflags;
 // https://www.nesdev.org/wiki/PPU
 
 pub struct Ppu {
-    chr_rom: Vec<u8>,
+    pub chr_rom: Vec<u8>,
     pallete: [u8; 32],
-    vram: [u8; 2048],
+    pub vram: [u8; 2048],
     oam: [u8; 256],
 
-    ctrl_register: PpuCtrlRegister,
+    pub ctrl_register: PpuCtrlRegister,
     addr_register: PpuAddrRegister,
     data_register: PpuAddrRegister,
 
@@ -146,6 +146,26 @@ impl PpuCtrlRegister {
             32
         } else {
             1
+        }
+    }
+
+    pub fn base_addr(&self) -> u16 {
+        0x2000 | (((self.bits() & 0b11) as u16) << 12)
+    }
+
+    pub fn bg_bank_addr(&self) -> u16 {
+        if self.contains(PpuCtrlRegister::BG_PATTERN_TABLE_ADDR) {
+            0x1000
+        } else {
+            0x0000
+        }
+    }
+
+    pub fn sprite_bank_addr(&self) -> u16 {
+        if self.contains(PpuCtrlRegister::SPRITE_PATTERN_TABLE_ADDR) {
+            0x1000
+        } else {
+            0x0000
         }
     }
 
