@@ -7,16 +7,16 @@ pub struct Ppu {
     pallete: [u8; 32],
     pub vram: [u8; 2048],
     oam: [u8; 256],
-
+    mirroring: bool,
     pub ctrl_register: PpuCtrlRegister,
     addr_register: PpuAddrRegister,
     data_register: PpuAddrRegister,
-
+    status_register: PpuStatusRegister,
     buffer: u8,
 }
 
 impl Ppu {
-    pub fn new(chr_rom: Vec<u8>) -> Self {
+    pub fn new(chr_rom: Vec<u8>, mirroring: bool) -> Self {
         Self {
             chr_rom,
             pallete: [0; 32],
@@ -25,7 +25,8 @@ impl Ppu {
             ctrl_register: PpuCtrlRegister::new(),
             addr_register: PpuAddrRegister::new(),
             data_register: PpuAddrRegister::new(),
-
+            status_register: PpuStatusRegister::new(),
+            mirroring,
             buffer: 0,
         }
     }
@@ -42,13 +43,26 @@ impl Ppu {
         self.ctrl_register.bits = input;
     }
 
+    pub fn read_ppustatus(&mut self) -> u8 {
+        self.status_register.read()
+    }
+
     fn increment_vram(&mut self) {
         self.addr_register.inc(self.ctrl_register.vram_inc());
     }
 
     fn mirror_vram_addr(&mut self, addr: u16) -> u16 {
-        // TODO implement this
-        return addr;
+        let index = addr - 0x2000;
+        let quadrant = index / 0x400;
+        match (quadrant, &self.mirroring) {
+            (1, false) => index - 0x400,
+            (1, true) => index - 0x800,
+            (2, false) => index - 0x400,
+            (2, true) => index - 0x800,
+            (3, false) => index - 0x800,
+            (3, true) => index - 0x800,
+            _ => index,
+        }
     }
 
     pub fn read_data(&mut self) -> u8 {
@@ -171,5 +185,23 @@ impl PpuCtrlRegister {
 
     pub fn update(&mut self, input: u8) {
         self.bits = input;
+    }
+}
+
+bitflags! {
+    pub struct PpuStatusRegister: u8 {
+        const SPRITE_OVERFLOW = 0b0010_0000;
+        const SPRITE_0_HIT = 0b0100_0000;
+        const VBLANK_START = 0b1000_0000;
+    }
+}
+
+impl PpuStatusRegister {
+    pub fn new() -> Self {
+        PpuStatusRegister::empty()
+    }
+
+    pub fn read(&self) -> u8 {
+        self.bits()
     }
 }

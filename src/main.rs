@@ -47,7 +47,8 @@ async fn main() {
     clear_background(BLUE);
     loop {
         cpu.step();
-        render::draw_background(&cpu.bus.ppu.chr_rom, &cpu.bus.ram, 1, &mut image);
+        let bank = cpu.bus.ppu.ctrl_register.bg_bank_addr();
+        render::draw_background(&cpu.bus.ppu.chr_rom, &cpu.bus.ram, bank, &mut image);
         let tex_params = DrawTextureParams {
             dest_size: Some(vec2(screen_width(), screen_height())),
             source: None,

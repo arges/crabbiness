@@ -130,27 +130,18 @@ struct InstructionBytes<'a> {
 
 impl InstructionBytes<'_> {
     fn get_address(&self) -> u16 {
-        if self.bytes.len() == 3 {
-            u16::from_le_bytes([self.bytes[1], self.bytes[2]])
-        } else {
-            0
-        }
+        assert!(self.bytes.len() == 3);
+        u16::from_le_bytes([self.bytes[1], self.bytes[2]])
     }
 
     fn get_immediate(&self) -> u8 {
-        if self.bytes.len() == 2 {
-            self.bytes[1]
-        } else {
-            0
-        }
+        assert!(self.bytes.len() == 2);
+        self.bytes[1]
     }
 
     fn get_offset(&self) -> i8 {
-        if self.bytes.len() == 2 {
-            self.bytes[1] as i8
-        } else {
-            0
-        }
+        assert!(self.bytes.len() == 2);
+        self.bytes[1] as i8
     }
 }
 
@@ -257,7 +248,7 @@ impl Cpu {
         self.p & flag as u8 == 0
     }
 
-    fn branch(&mut self, b: InstructionBytes, condition: bool) -> u16 {
+    fn branch(&mut self, b: &InstructionBytes, condition: bool) -> u16 {
         let new_pc = self.pc.wrapping_add(b.bytes.len() as u16);
 
         if condition {
@@ -276,7 +267,7 @@ impl Cpu {
         (input >> 1, input & 1 == 1)
     }
 
-    fn compare(&mut self, b: InstructionBytes, reg: u8) {
+    fn compare(&mut self, b: &InstructionBytes, reg: u8) {
         let op = self.get_operand(b) as u8;
         debug!("compare op {:02X} reg {:02X}", op, reg);
         let result = reg.wrapping_sub(op);
@@ -321,7 +312,19 @@ impl Cpu {
         self.set_zero_negative_flags(self.a);
     }
 
-    fn execute(&mut self, b: InstructionBytes) {
+    fn set_result(&mut self, b: &InstructionBytes, result: u8) {
+        match b.instruction.mode {
+            Accumulator => {
+                self.a = result;
+            }
+            _ => {
+                let addr = self.get_operand_address(b);
+                self.bus.write_u8(addr, result);
+            }
+        }
+    }
+
+    fn execute(&mut self, b: &InstructionBytes) {
         let mut new_pc = self.pc.wrapping_add((b.instruction.length) as u16);
         match b.instruction.opcode {
             Opcode::Nop => {}
@@ -338,13 +341,18 @@ impl Cpu {
             }
             Opcode::Asl => {
                 let op = self.get_operand(b);
-                self.a = op.rotate_left(1) as u8 & 0xfe;
-                if op & 0x80 != 0 {
-                    self.set_flag(Flag::Carry);
-                } else {
-                    self.clear_flag(Flag::Carry);
+                self.change_flag(Flag::Carry, op & 0x80 != 0);
+                let result = op.rotate_left(1) as u8 & 0xfe;
+                self.set_zero_negative_flags(result);
+                match b.instruction.mode {
+                    Accumulator => {
+                        self.a = result;
+                    }
+                    _ => {
+                        let addr = self.get_operand_address(b);
+                        self.bus.write_u8(addr, result);
+                    }
                 }
-                self.set_zero_negative_flags(self.a);
             }
             Opcode::Bcc => {
                 new_pc = self.branch(b, self.is_flag_clear(Flag::Carry));
@@ -395,6 +403,7 @@ impl Cpu {
                 let addr = self.get_operand_address(b);
                 let value = self.bus.read_u8(addr).wrapping_add(1);
                 self.bus.write_u8(addr, value);
+                self.set_zero_negative_flags(value);
             }
             Opcode::Inx => {
                 self.x = self.x.wrapping_add(1);
@@ -457,6 +466,7 @@ impl Cpu {
                 let addr = self.get_operand_address(b);
                 let value = self.bus.read_u8(addr).wrapping_sub(1);
                 self.bus.write_u8(addr, value);
+                self.set_zero_negative_flags(value);
                 // TODO write tests
             }
             Opcode::Dex => {
@@ -497,13 +507,10 @@ impl Cpu {
                     0x00
                 };
                 let op = self.get_operand(b);
-                if op & 0x80 != 0 {
-                    self.set_flag(Flag::Carry);
-                } else {
-                    self.clear_flag(Flag::Carry);
-                }
-                self.a = op.rotate_left(1) as u8 | carry_in;
-                self.set_zero_negative_flags(self.a);
+                self.change_flag(Flag::Carry, op & 0x80 != 0);
+                let result = op.rotate_left(1) as u8 | carry_in;
+                self.set_zero_negative_flags(result);
+                self.set_result(b, result);
             }
             Opcode::Ror => {
                 let carry_in = if self.p & (Flag::Carry as u8) != 0 {
@@ -512,13 +519,10 @@ impl Cpu {
                     0x00
                 };
                 let op = self.get_operand(b);
-                if op & 0x01 != 0 {
-                    self.set_flag(Flag::Carry);
-                } else {
-                    self.clear_flag(Flag::Carry);
-                }
-                self.a = op.rotate_right(1) as u8 | carry_in;
-                self.set_zero_negative_flags(self.a);
+                self.change_flag(Flag::Carry, op & 0x01 != 0);
+                let result = op.rotate_right(1) as u8 | carry_in;
+                self.set_zero_negative_flags(result);
+                self.set_result(b, result);
             }
 
             Opcode::Sbc => {
@@ -544,7 +548,7 @@ impl Cpu {
 
             Opcode::Lda => {
                 self.a = self.get_operand(b) as u8;
-                debug!("LDA a is {:02x}", self.a);
+                debug!("LDA a is {:02x}\n", self.a);
                 self.set_zero_negative_flags(self.a);
             }
 
@@ -612,7 +616,7 @@ impl Cpu {
         self.pc = new_pc;
     }
 
-    fn get_operand(&mut self, b: InstructionBytes) -> u16 {
+    fn get_operand(&mut self, b: &InstructionBytes) -> u16 {
         match b.instruction.mode {
             Immediate => b.get_immediate() as u16,
             Accumulator => self.a as u16,
@@ -629,7 +633,7 @@ impl Cpu {
     /// references:
     /// https://www.nesdev.org/wiki/CPU_addressing_modes
     /// http://www.emulator101.com/6502-addressing-modes.html
-    fn get_operand_address(&mut self, b: InstructionBytes) -> u16 {
+    fn get_operand_address(&mut self, b: &InstructionBytes) -> u16 {
         match b.instruction.mode {
             ZeroPage => b.get_immediate() as u16,
             ZeroPageX => b.get_immediate().wrapping_add(self.x) as u16,
@@ -639,14 +643,29 @@ impl Cpu {
             AbsoluteX => b.get_address().wrapping_add(self.x as u16),
             AbsoluteY => b.get_address().wrapping_add(self.y as u16),
 
-            Indirect => self.bus.read_u16(b.get_address()),
-            IndirectX => self
-                .bus
-                .read_u16(b.get_immediate().wrapping_add(self.x) as u16),
-            IndirectY => self
-                .bus
-                .read_u16(b.get_immediate() as u16)
-                .wrapping_add(self.y as u16),
+            Indirect => {
+                let addr = b.get_address();
+                if addr & 0x00ff == 0x00ff {
+                    let lsb = self.bus.read_u8(addr);
+                    let msb = self.bus.read_u8(addr & 0xff00);
+                    lsb as u16 | (msb as u16) << 8
+                } else {
+                    self.bus.read_u16(addr)
+                }
+            }
+            IndirectX => {
+                let addr = b.get_immediate().wrapping_add(self.x) as u8;
+                let lsb = self.bus.read_u8(addr as u16);
+                let msb = self.bus.read_u8(addr.wrapping_add(1) as u16);
+                lsb as u16 | (msb as u16) << 8
+            }
+            IndirectY => {
+                let addr = b.get_immediate();
+                let lsb = self.bus.read_u8(addr as u16);
+                let msb = self.bus.read_u8(addr.wrapping_add(1) as u16);
+                let target = lsb as u16 | (msb as u16) << 8;
+                target.wrapping_add(self.y as u16)
+            }
             _ => panic!("get_operand not supported for {:?}", b.instruction.mode),
         }
     }
@@ -1112,13 +1131,13 @@ impl Cpu {
             },
             0xe8 => Instruction {
                 opcode: Opcode::Inx,
-                mode: Indirect,
+                mode: Implied,
                 length: 1,
                 cycles: 2,
             },
             0xc8 => Instruction {
                 opcode: Opcode::Iny,
-                mode: Indirect,
+                mode: Implied,
                 length: 1,
                 cycles: 2,
             },
@@ -1644,7 +1663,7 @@ impl Cpu {
         self.cycles = self.cycles.wrapping_add(instruction.cycles as u64);
 
         println!("{:04X}  {}\t\t\t{}", self.pc, instruction_bytes, self);
-        self.execute(instruction_bytes);
+        self.execute(&instruction_bytes);
     }
 }
 
@@ -1730,7 +1749,7 @@ mod tests {
 
     #[rstest]
     #[case(vec![0x4C, 0x5a, 0xa5], 0xa55a)]
-    #[case(vec![0x6c, 0x03, 0x80, 0xa5, 0x5a], 0xa55a)]
+    #[case(vec![0x6c, 0x03, 0x80, 0x5a, 0xa5], 0xa55a)]
     fn test_jmp(#[case] in_prg: Vec<u8>, #[case] ex_pc: u16) {
         let mut cpu = setup_cpu(test_program(in_prg));
         cpu.reset();
@@ -1774,10 +1793,10 @@ mod tests {
         assert_eq!(cpu.bus.read_u8(0x01fd), 0xda);
         let val = cpu.stack_pop_u8();
         assert_eq!(val, 0xda);
-        cpu.stack_push_u16(0x5cda);
+        cpu.stack_push_u16(0xda5c);
         assert_eq!(cpu.bus.read_u16(0x01fc), 0xda5c);
         let val = cpu.stack_pop_u16();
-        assert_eq!(val, 0x5cda);
+        assert_eq!(val, 0xda5c);
     }
 
     #[rstest]
@@ -1917,10 +1936,29 @@ mod tests {
     }
 
     #[rstest]
-    //    #[case(vec![0xa5,0xff], vec![(0x00ff, 0x5a)], 0xff, 0xff, 0b00000000, 0x5a, 0b00000000)]
-    //   #[case(vec![0xb5,0xef], vec![(0x00ff, 0x5a)], 0xff, 0x10, 0b00000000, 0x5a, 0b00000000)]
-    //  #[case(vec![0xad,0x23,0x01], vec![(0x0123, 0x77)], 0xff, 0x10, 0b00000000, 0x77, 0b00000000)]
-    #[case(vec![0xa1,0x10], vec![(0x0020, 0x01),(0x0021,0x23),(0x0123,0x5a)], 0xff, 0x10, 0b00000000, 0x5a, 0b00000000)]
+    #[case(vec![0x0a], 0x80, 0b00000000, 0x00, 0b00000011)]
+    fn test_asl(
+        #[case] in_prg: Vec<u8>,
+        #[case] in_a: u8,
+        #[case] in_flags: u8,
+        #[case] ex_a: u8,
+        #[case] ex_flags: u8,
+    ) {
+        let mut cpu = setup_cpu(test_program(in_prg));
+        cpu.reset();
+        cpu.a = in_a;
+        cpu.p = in_flags;
+        cpu.step();
+        assert_eq!(cpu.a, ex_a);
+        assert_eq!(cpu.p, ex_flags);
+    }
+
+    #[rstest]
+    //#[case(vec![0xa5,0xff], vec![(0x00ff, 0x5a)], 0xff, 0xff, 0b00000000, 0x5a, 0b00000000)]
+    //#[case(vec![0xb5,0xef], vec![(0x00ff, 0x5a)], 0xff, 0x10, 0b00000000, 0x5a, 0b00000000)]
+    //#[case(vec![0xad,0x23,0x01], vec![(0x0123, 0x77)], 0xff, 0x10, 0b00000000, 0x77, 0b00000000)]
+    //#[case(vec![0xa1,0x10], vec![(0x0020, 0x23),(0x0021,0x01),(0x0123,0x5a)], 0xff, 0x10, 0b00000000, 0x5a, 0b00000000)]
+    #[case(vec![0xa1,0xff], vec![(0x00ff, 0x23),(0x0000,0x01),(0x0123,0x5a)], 0xff, 0x00, 0b00000000, 0x5a, 0b00000000)]
     fn test_lda(
         #[case] in_prg: Vec<u8>,
         #[case] memory: Vec<(u16, u8)>,

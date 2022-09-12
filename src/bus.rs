@@ -11,7 +11,7 @@ pub struct Bus {
 
 impl Bus {
     pub fn new(rom: Rom) -> Self {
-        let ppu = Ppu::new(rom.chr_rom.clone());
+        let ppu = Ppu::new(rom.chr_rom.clone(), rom.mirroring());
 
         Bus {
             ram: [0; 2048],
@@ -21,17 +21,17 @@ impl Bus {
     }
 
     pub fn read_u8(&mut self, address: u16) -> u8 {
-        //println!("reading {:04x}", address);
         debug!("reading @ {:04x}", address);
         match address {
             0x0000..=0x1fff => self.ram[address as usize % 0x0800],
             0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 | 0x4014 => {
                 panic!("Attempt to read from write-only PPU address {:x}", address);
             }
+            0x2002 => self.ppu.read_ppustatus(),
             0x2007 => self.ppu.read_data(),
-            0x2008..=0x7fff => self.read_u8(address & 0x2007),
+            0x2008..=0x3fff => self.read_u8(address & 0x2007),
             0x8000..=0xffff => self.rom.read_byte(address),
-            _ => 0,
+            _ => panic!("invalid read address {:04X}", address),
         }
     }
 
@@ -39,19 +39,30 @@ impl Bus {
         match address {
             0x0000..=0x1fff => self.ram[address as usize % 0x0800] = data,
             0x2000 => self.ppu.write_ppuctrl(data),
+
+            0x2001 => {}
+            0x2002 => panic!("attemped to write status reg"),
+            0x2003 => {}
+            0x2004 => {}
+            0x2005 => {}
+
             0x2006 => self.ppu.write_ppuaddr(data),
             0x2007 => self.ppu.write_ppudata(data),
-            0x2008..=0x7fff => {
+            0x2008..=0x3fff => {
                 self.write_u8(address & 0x2007, data);
             }
-            _ => (),
+
+            0x4000..=0x4013 | 0x4015 => {
+                // TODO: implement APU
+            }
+            _ => panic!("invalid write address {:04X}", address),
         }
     }
 
     pub fn read_u16(&mut self, address: u16) -> u16 {
         //FIXME: is this correct
-        ((self.read_u8(address.wrapping_add(0)) as u16) << 8)
-            | (self.read_u8(address.wrapping_add(1)) as u16)
+        (self.read_u8(address.wrapping_add(0)) as u16)
+            | ((self.read_u8(address.wrapping_add(1)) as u16) << 8)
     }
 
     pub fn read_bytes(&mut self, address: u16, size: u8) -> Vec<u8> {
@@ -68,8 +79,7 @@ mod tests {
 
     fn setup_bus(prg_rom: Vec<u8>) -> Bus {
         let rom = Rom::new_from_vec(prg_rom);
-        let bus = Bus::new(rom);
-        bus
+        Bus::new(rom)
     }
 
     #[test]
@@ -80,7 +90,7 @@ mod tests {
 
     #[test]
     fn test_read_u16() {
-        let mut bus = setup_bus(vec![0xab, 0xcd]);
+        let mut bus = setup_bus(vec![0xcd, 0xab]);
         assert_eq!(bus.read_u16(0x8000), 0xabcd);
     }
 }

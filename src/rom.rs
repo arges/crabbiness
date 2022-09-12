@@ -1,7 +1,15 @@
+use bitflags::bitflags;
+
 const PRG_ROM_PAGE_SIZE: usize = 0x4000;
 const PRG_RAM_PAGE_SIZE: usize = 0x2000;
 const CHR_ROM_PAGE_SIZE: usize = 0x2000;
 const CHR_RAM_PAGE_SIZE: usize = 0x2000;
+
+bitflags! {
+    pub struct RomFlags: u8 {
+        const MIRRORING = 0b0000_0001;
+    }
+}
 
 #[derive(Debug)]
 struct RomHeader {
@@ -10,7 +18,7 @@ struct RomHeader {
     chr_rom_bytes: usize,
     prg_ram_bytes: usize,
     chr_ram_bytes: usize,
-    flags: u16,
+    flags: RomFlags,
 }
 
 #[derive(Debug)]
@@ -34,7 +42,7 @@ impl Rom {
                 data[8] as usize * PRG_RAM_PAGE_SIZE
             },
             chr_ram_bytes: if data[5] == 0 { CHR_RAM_PAGE_SIZE } else { 0 },
-            flags: data[6] as u16 | (data[7] as u16 >> 8),
+            flags: RomFlags { bits: data[6] },
         };
 
         Rom {
@@ -52,7 +60,7 @@ impl Rom {
                 chr_rom_bytes: 0,
                 prg_ram_bytes: 0,
                 chr_ram_bytes: 0,
-                flags: 0,
+                flags: RomFlags { bits: 0 },
             },
             prg_rom,
             chr_rom: vec![],
@@ -62,5 +70,9 @@ impl Rom {
         // This only implements mapper0
         // TODO: implement other mappers
         self.prg_rom[((address - 0x8000) % 0x4000) as usize]
+    }
+
+    pub fn mirroring(&self) -> bool {
+        self.header.flags.contains(RomFlags::MIRRORING)
     }
 }
