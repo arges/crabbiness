@@ -7,6 +7,7 @@ pub struct Bus {
     pub ram: [u8; 2048],
     rom: Rom,
     pub ppu: Ppu,
+    cycle: usize,
 }
 
 impl Bus {
@@ -17,7 +18,21 @@ impl Bus {
             ram: [0; 2048],
             rom,
             ppu,
+            cycle: 0,
         }
+    }
+
+    pub fn tick(&mut self, cycle: u8) {
+        self.cycle += cycle as usize;
+        self.ppu.tick(cycle * 3);
+    }
+
+    pub fn take_nmi(&mut self) -> bool {
+        if self.ppu.has_nmi {
+            self.ppu.has_nmi = false;
+            return true;
+        }
+        false
     }
 
     pub fn read_u8(&mut self, address: u16) -> u8 {
@@ -60,7 +75,6 @@ impl Bus {
     }
 
     pub fn read_u16(&mut self, address: u16) -> u16 {
-        //FIXME: is this correct
         (self.read_u8(address.wrapping_add(0)) as u16)
             | ((self.read_u8(address.wrapping_add(1)) as u16) << 8)
     }

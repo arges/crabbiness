@@ -87,6 +87,7 @@ enum Opcode {
     Iny,
     Jmp,
     Jsr,
+    Kil,
     Lda,
     Ldx,
     Ldy,
@@ -217,6 +218,16 @@ impl Cpu {
             cycles: 0,
             bus,
         }
+    }
+
+    pub fn nmi(&mut self) -> u8 {
+        self.stack_push_u16(self.pc);
+        self.clear_flag(Flag::Break);
+        self.set_flag(Flag::Unused);
+        self.stack_push_u8(self.p);
+        self.set_flag(Flag::IntDisable);
+        self.pc = self.bus.read_u16(0xfffa);
+        2
     }
 
     fn set_zero_negative_flags(&mut self, value: u8) {
@@ -422,12 +433,7 @@ impl Cpu {
                 debug!("bit: result is {:02X} operand is {:02X}", result, operand);
             }
             Opcode::Brk => {
-                self.pc = self.pc.wrapping_add(1);
-                self.set_flag(Flag::IntDisable);
-                self.stack_push_u16(self.pc);
-                self.stack_push_u8(self.p);
-                self.pc = self.bus.read_u16(0xfffe);
-                // TODO write tests
+                self.nmi();
             }
             Opcode::Rti => {
                 self.p = self.stack_pop_u8();
@@ -610,6 +616,9 @@ impl Cpu {
             Opcode::Jmp => {
                 new_pc = self.get_operand_address(b);
                 debug!("jmp to {:02X}", new_pc)
+            }
+            Opcode::Kil => {
+                todo!("KIL")
             }
         }
 
@@ -1630,6 +1639,114 @@ impl Cpu {
                 cycles: 7,
             },
 
+            0x02 => Instruction {
+                opcode: Opcode::Kil,
+                mode: Implied,
+                length: 1,
+                cycles: 1,
+            },
+            0x12 => Instruction {
+                opcode: Opcode::Kil,
+                mode: Implied,
+                length: 1,
+                cycles: 1,
+            },
+            0x22 => Instruction {
+                opcode: Opcode::Kil,
+                mode: Implied,
+                length: 1,
+                cycles: 1,
+            },
+            0x32 => Instruction {
+                opcode: Opcode::Kil,
+                mode: Implied,
+                length: 1,
+                cycles: 1,
+            },
+            0x42 => Instruction {
+                opcode: Opcode::Kil,
+                mode: Implied,
+                length: 1,
+                cycles: 1,
+            },
+            0x52 => Instruction {
+                opcode: Opcode::Kil,
+                mode: Implied,
+                length: 1,
+                cycles: 1,
+            },
+            0x62 => Instruction {
+                opcode: Opcode::Kil,
+                mode: Implied,
+                length: 1,
+                cycles: 1,
+            },
+            0x72 => Instruction {
+                opcode: Opcode::Kil,
+                mode: Implied,
+                length: 1,
+                cycles: 1,
+            },
+            0x92 => Instruction {
+                opcode: Opcode::Kil,
+                mode: Implied,
+                length: 1,
+                cycles: 1,
+            },
+            0xB2 => Instruction {
+                opcode: Opcode::Kil,
+                mode: Implied,
+                length: 1,
+                cycles: 1,
+            },
+            0xD2 => Instruction {
+                opcode: Opcode::Kil,
+                mode: Implied,
+                length: 1,
+                cycles: 1,
+            },
+            0xF2 => Instruction {
+                opcode: Opcode::Kil,
+                mode: Implied,
+                length: 1,
+                cycles: 1,
+            },
+            0x1a => Instruction {
+                opcode: Opcode::Nop,
+                mode: Implied,
+                length: 2,
+                cycles: 1,
+            },
+            0x3a => Instruction {
+                opcode: Opcode::Nop,
+                mode: Implied,
+                length: 2,
+                cycles: 1,
+            },
+            0x5a => Instruction {
+                opcode: Opcode::Nop,
+                mode: Implied,
+                length: 2,
+                cycles: 1,
+            },
+            0x7a => Instruction {
+                opcode: Opcode::Nop,
+                mode: Implied,
+                length: 2,
+                cycles: 1,
+            },
+            0xda => Instruction {
+                opcode: Opcode::Nop,
+                mode: Implied,
+                length: 2,
+                cycles: 1,
+            },
+            0xfa => Instruction {
+                opcode: Opcode::Nop,
+                mode: Implied,
+                length: 2,
+                cycles: 1,
+            },
             _ => Instruction {
                 opcode: Opcode::Nop,
                 mode: Implied,
@@ -1646,13 +1763,9 @@ impl Cpu {
         self.p = 0x24;
         self.pc = 0xc000;
         self.sp = 0xfd;
-        debug!(
-            "\x1b[94m  {:04X} \x1b[0m \x1b[91m{:<23}\x1b[0m {}",
-            self.pc, "RESET", self
-        )
     }
 
-    pub fn step(&mut self) {
+    pub fn step(&mut self) -> u8 {
         let op = self.bus.read_u8(self.pc);
         let instruction = self.decode(op);
         let instruction_bytes = InstructionBytes {
@@ -1661,9 +1774,11 @@ impl Cpu {
         };
 
         self.cycles = self.cycles.wrapping_add(instruction.cycles as u64);
+        self.bus.tick(instruction.cycles);
 
-        println!("{:04X}  {}\t\t\t{}", self.pc, instruction_bytes, self);
+        println!("{:04X}  {}   {}", self.pc, instruction_bytes, self);
         self.execute(&instruction_bytes);
+        instruction.cycles
     }
 }
 
@@ -1954,10 +2069,10 @@ mod tests {
     }
 
     #[rstest]
-    //#[case(vec![0xa5,0xff], vec![(0x00ff, 0x5a)], 0xff, 0xff, 0b00000000, 0x5a, 0b00000000)]
-    //#[case(vec![0xb5,0xef], vec![(0x00ff, 0x5a)], 0xff, 0x10, 0b00000000, 0x5a, 0b00000000)]
-    //#[case(vec![0xad,0x23,0x01], vec![(0x0123, 0x77)], 0xff, 0x10, 0b00000000, 0x77, 0b00000000)]
-    //#[case(vec![0xa1,0x10], vec![(0x0020, 0x23),(0x0021,0x01),(0x0123,0x5a)], 0xff, 0x10, 0b00000000, 0x5a, 0b00000000)]
+    #[case(vec![0xa5,0xff], vec![(0x00ff, 0x5a)], 0xff, 0xff, 0b00000000, 0x5a, 0b00000000)]
+    #[case(vec![0xb5,0xef], vec![(0x00ff, 0x5a)], 0xff, 0x10, 0b00000000, 0x5a, 0b00000000)]
+    #[case(vec![0xad,0x23,0x01], vec![(0x0123, 0x77)], 0xff, 0x10, 0b00000000, 0x77, 0b00000000)]
+    #[case(vec![0xa1,0x10], vec![(0x0020, 0x23),(0x0021,0x01),(0x0123,0x5a)], 0xff, 0x10, 0b00000000, 0x5a, 0b00000000)]
     #[case(vec![0xa1,0xff], vec![(0x00ff, 0x23),(0x0000,0x01),(0x0123,0x5a)], 0xff, 0x00, 0b00000000, 0x5a, 0b00000000)]
     fn test_lda(
         #[case] in_prg: Vec<u8>,

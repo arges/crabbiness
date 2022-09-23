@@ -13,6 +13,9 @@ pub struct Ppu {
     data_register: PpuAddrRegister,
     status_register: PpuStatusRegister,
     buffer: u8,
+    cycle: usize,
+    scanline: u16,
+    pub has_nmi: bool,
 }
 
 impl Ppu {
@@ -28,19 +31,47 @@ impl Ppu {
             status_register: PpuStatusRegister::new(),
             mirroring,
             buffer: 0,
+            cycle: 0,
+            scanline: 0,
+            has_nmi: false,
         }
+    }
+
+    pub fn tick(&mut self, cycle: u8) -> bool {
+        self.cycle += cycle as usize;
+        if self.cycle >= 341 {
+            self.cycle -= 341;
+            self.scanline += 1;
+            if self.scanline == 241 && self.ctrl_register.nmi_starts_on_vblank_ok() {
+                self.status_register.set_vblank(true);
+                self.has_nmi = true;
+            }
+            if self.scanline >= 262 {
+                self.scanline = 0;
+                self.has_nmi = false;
+                self.status_register.set_vblank(false);
+                return true;
+            }
+        }
+        false
     }
 
     pub fn write_ppuaddr(&mut self, input: u8) {
         self.addr_register.update(input);
     }
-
     pub fn write_ppudata(&mut self, input: u8) {
         self.data_register.update(input);
     }
 
     pub fn write_ppuctrl(&mut self, input: u8) {
+        let before = self.ctrl_register.nmi_starts_on_vblank_ok();
         self.ctrl_register.bits = input;
+        if !before
+            && self.ctrl_register.nmi_starts_on_vblank_ok()
+            && self.status_register.is_vblank()
+        {
+            self.has_nmi = true;
+        }
     }
 
     pub fn read_ppustatus(&mut self) -> u8 {
@@ -183,6 +214,10 @@ impl PpuCtrlRegister {
         }
     }
 
+    pub fn nmi_starts_on_vblank_ok(&mut self) -> bool {
+        self.contains(PpuCtrlRegister::NMISTARTS_ON_VBI)
+    }
+
     pub fn update(&mut self, input: u8) {
         self.bits = input;
     }
@@ -199,6 +234,14 @@ bitflags! {
 impl PpuStatusRegister {
     pub fn new() -> Self {
         PpuStatusRegister::empty()
+    }
+
+    pub fn set_vblank(&mut self, status: bool) {
+        self.set(PpuStatusRegister::VBLANK_START, status);
+    }
+
+    pub fn is_vblank(self) -> bool {
+        self.contains(PpuStatusRegister::VBLANK_START)
     }
 
     pub fn read(&self) -> u8 {

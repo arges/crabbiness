@@ -46,7 +46,13 @@ async fn main() {
     cpu.reset();
     clear_background(BLUE);
     loop {
-        cpu.step();
+        let cycles = if cpu.bus.take_nmi() {
+            cpu.nmi()
+        } else {
+            cpu.step()
+        };
+        cpu.bus.tick(cycles);
+
         let bank = cpu.bus.ppu.ctrl_register.bg_bank_addr();
         render::draw_background(&cpu.bus.ppu.chr_rom, &cpu.bus.ram, bank, &mut image);
         let tex_params = DrawTextureParams {
