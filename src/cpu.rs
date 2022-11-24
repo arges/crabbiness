@@ -220,14 +220,16 @@ impl Cpu {
         }
     }
 
-    pub fn nmi(&mut self) -> u8 {
+    pub fn nmi(&mut self) -> u16 {
+        debug!("executing nmi");
         self.stack_push_u16(self.pc);
         self.clear_flag(Flag::Break);
         self.set_flag(Flag::Unused);
         self.stack_push_u8(self.p);
         self.set_flag(Flag::IntDisable);
-        self.pc = self.bus.read_u16(0xfffa);
-        2
+        let new_pc = self.bus.read_u16(0xfffa);
+        self.pc = new_pc;
+        new_pc
     }
 
     fn set_zero_negative_flags(&mut self, value: u8) {
@@ -261,14 +263,8 @@ impl Cpu {
 
     fn branch(&mut self, b: &InstructionBytes, condition: bool) -> u16 {
         let new_pc = self.pc.wrapping_add(b.bytes.len() as u16);
-
         if condition {
-            let offset = b.get_offset();
-            if offset > 0 {
-                new_pc.wrapping_add(offset as u16)
-            } else {
-                new_pc.wrapping_sub(offset as u16)
-            }
+            new_pc.wrapping_add(b.get_offset() as u16)
         } else {
             new_pc
         }
@@ -433,7 +429,7 @@ impl Cpu {
                 debug!("bit: result is {:02X} operand is {:02X}", result, operand);
             }
             Opcode::Brk => {
-                self.nmi();
+                new_pc = self.nmi();
             }
             Opcode::Rti => {
                 self.p = self.stack_pop_u8();
@@ -1761,7 +1757,7 @@ impl Cpu {
         self.a = 0;
         self.x = 0;
         self.p = 0x24;
-        self.pc = 0xc000;
+        self.pc = self.bus.read_u16(0xfffc);
         self.sp = 0xfd;
     }
 
@@ -1831,12 +1827,14 @@ mod tests {
     }
 
     #[rstest]
-    #[case(vec![0x10, 0x10], 0b1000_0000, 0b1000_0000, 0xc002)]
-    #[case(vec![0x10, 0x10], 0b0000_0000, 0b0000_0000, 0xc012)]
-    #[case(vec![0xf0, 0x32], 0b11101111, 0b11101111, 0xc034)]
+    #[case(vec![0x10, 0x10], 0xc000, 0b1000_0000, 0b1000_0000, 0xc002)]
+    #[case(vec![0x10, 0x10], 0xc000, 0b0000_0000, 0b0000_0000, 0xc012)]
+    #[case(vec![0x10, 0xFB], 0xc000, 0b0000_0000, 0b0000_0000, 0xbffd)]
+    #[case(vec![0xf0, 0x32], 0xc000, 0b1110_1111, 0b1110_1111, 0xc034)]
 
     fn test_branches(
         #[case] in_prg: Vec<u8>,
+        #[case] in_pc: u16,
         #[case] in_flags: u8,
         #[case] ex_flags: u8,
         #[case] ex_pc: u16,
@@ -1844,6 +1842,7 @@ mod tests {
         let mut cpu = setup_cpu(test_program(in_prg));
         cpu.reset();
         cpu.p = in_flags;
+        cpu.pc = in_pc;
         cpu.step();
         assert_eq!(cpu.p, ex_flags);
         assert_eq!(cpu.pc, ex_pc);
@@ -2096,5 +2095,19 @@ mod tests {
         assert_eq!(cpu.p, ex_flags);
     }
 
+    #[test]
+    fn test_nmi() {
+        let mut prog: Vec<u8> = vec![0x00];
+        prog.append(&mut vec![0; 0x3ffa - 1]);
+        prog.append(&mut vec![0x00, 0xaa]);
+        prog.append(&mut vec![0x00, 0x80]);
+
+        let mut cpu = setup_cpu(prog);
+        cpu.reset();
+        cpu.step();
+        assert_eq!(cpu.pc, 0xaa00);
+    }
+
+    // TODO: write tests for RTS/JTS
     // TODO add more tests
 }

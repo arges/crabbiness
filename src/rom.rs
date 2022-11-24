@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use log::debug;
 
 const PRG_ROM_PAGE_SIZE: usize = 0x4000;
 const PRG_RAM_PAGE_SIZE: usize = 0x2000;
@@ -8,6 +9,7 @@ const CHR_RAM_PAGE_SIZE: usize = 0x2000;
 bitflags! {
     pub struct RomFlags: u8 {
         const MIRRORING = 0b0000_0001;
+        const TRAINER = 0b0000_0100;
     }
 }
 
@@ -45,10 +47,17 @@ impl Rom {
             flags: RomFlags { bits: data[6] },
         };
 
+        let prg_rom_offset = if header.flags.contains(RomFlags::TRAINER) {
+            528
+        } else {
+            16
+        };
+        let chr_rom_offset = prg_rom_offset + prg_rom_bytes;
+
         Rom {
             header,
-            prg_rom: data[16..(16 + prg_rom_bytes)].to_vec(),
-            chr_rom: data[(16 + prg_rom_bytes)..(16 + prg_rom_bytes + chr_rom_bytes)].to_vec(),
+            prg_rom: data[prg_rom_offset..(prg_rom_offset + prg_rom_bytes)].to_vec(),
+            chr_rom: data[chr_rom_offset..(chr_rom_offset + chr_rom_bytes)].to_vec(),
         }
     }
 
@@ -69,7 +78,11 @@ impl Rom {
     pub fn read_byte(&self, address: u16) -> u8 {
         // This only implements mapper0
         // TODO: implement other mappers
-        self.prg_rom[((address - 0x8000) % 0x4000) as usize]
+        let mut addr = address - 0x8000;
+        if self.prg_rom.len() == 0x4000 && addr >= 0x4000 {
+            addr %= 0x4000;
+        }
+        self.prg_rom[addr as usize]
     }
 
     pub fn mirroring(&self) -> bool {

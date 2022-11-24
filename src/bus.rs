@@ -67,7 +67,7 @@ impl Bus {
                 self.write_u8(address & 0x2007, data);
             }
 
-            0x4000..=0x4013 | 0x4015 => {
+            0x4000..=0x4015 => {
                 // TODO: implement APU
             }
             _ => panic!("invalid write address {:04X}", address),

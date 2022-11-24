@@ -47,7 +47,8 @@ async fn main() {
     clear_background(BLUE);
     loop {
         let cycles = if cpu.bus.take_nmi() {
-            cpu.nmi()
+            cpu.nmi();
+            2
         } else {
             cpu.step()
         };
