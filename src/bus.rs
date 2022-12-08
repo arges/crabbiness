@@ -22,17 +22,15 @@ impl Bus {
         }
     }
 
-    pub fn tick(&mut self, cycle: u8) {
+    pub fn tick(&mut self, cycle: u8) -> bool {
         self.cycle += cycle as usize;
+        let before = self.ppu.has_nmi.is_some();
         self.ppu.tick(cycle * 3);
+        !before && self.ppu.has_nmi.is_some()
     }
 
     pub fn take_nmi(&mut self) -> bool {
-        if self.ppu.has_nmi {
-            self.ppu.has_nmi = false;
-            return true;
-        }
-        false
+        self.ppu.has_nmi.take() == Some(true)
     }
 
     pub fn read_u8(&mut self, address: u16) -> u8 {
@@ -44,6 +42,10 @@ impl Bus {
             }
             0x2002 => self.ppu.read_ppustatus(),
             0x2007 => self.ppu.read_data(),
+            0x4016 | 0x4017 => {
+                // TODO joypads
+                0
+            }
             0x2008..=0x3fff => self.read_u8(address & 0x2007),
             0x8000..=0xffff => self.rom.read_byte(address),
             _ => panic!("invalid read address {:04X}", address),
@@ -69,6 +71,9 @@ impl Bus {
 
             0x4000..=0x4015 => {
                 // TODO: implement APU
+            }
+            0x4016 | 0x4017 => {
+                // TODO joypads
             }
             _ => panic!("invalid write address {:04X}", address),
         }

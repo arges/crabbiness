@@ -221,13 +221,25 @@ impl Cpu {
     }
 
     pub fn nmi(&mut self) -> u16 {
-        debug!("executing nmi");
+        debug!("nmi interrupt");
         self.stack_push_u16(self.pc);
         self.clear_flag(Flag::Break);
         self.set_flag(Flag::Unused);
         self.stack_push_u8(self.p);
         self.set_flag(Flag::IntDisable);
         let new_pc = self.bus.read_u16(0xfffa);
+        self.pc = new_pc;
+        new_pc
+    }
+
+    pub fn brk(&mut self) -> u16 {
+        debug!("brk interrupt");
+        self.stack_push_u16(self.pc);
+        self.clear_flag(Flag::Break);
+        self.set_flag(Flag::Unused);
+        self.stack_push_u8(self.p);
+        self.set_flag(Flag::IntDisable);
+        let new_pc = self.bus.read_u16(0xfffe);
         self.pc = new_pc;
         new_pc
     }
@@ -429,11 +441,11 @@ impl Cpu {
                 debug!("bit: result is {:02X} operand is {:02X}", result, operand);
             }
             Opcode::Brk => {
-                new_pc = self.nmi();
+                new_pc = self.brk();
             }
             Opcode::Rti => {
                 self.p = self.stack_pop_u8();
-                self.pc = self.stack_pop_u16();
+                new_pc = self.stack_pop_u16();
                 self.clear_flag(Flag::Break);
                 self.set_flag(Flag::Unused);
                 // TODO write tests
@@ -1770,7 +1782,6 @@ impl Cpu {
         };
 
         self.cycles = self.cycles.wrapping_add(instruction.cycles as u64);
-        self.bus.tick(instruction.cycles);
 
         println!("{:04X}  {}   {}", self.pc, instruction_bytes, self);
         self.execute(&instruction_bytes);

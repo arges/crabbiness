@@ -1,6 +1,5 @@
 use bitflags::bitflags;
-
-// https://www.nesdev.org/wiki/PPU
+use log::debug;
 
 pub struct Ppu {
     pub chr_rom: Vec<u8>,
@@ -10,12 +9,11 @@ pub struct Ppu {
     mirroring: bool,
     pub ctrl_register: PpuCtrlRegister,
     addr_register: PpuAddrRegister,
-    data_register: PpuAddrRegister,
     status_register: PpuStatusRegister,
     buffer: u8,
     cycle: usize,
     scanline: u16,
-    pub has_nmi: bool,
+    pub has_nmi: Option<bool>,
 }
 
 impl Ppu {
@@ -27,28 +25,30 @@ impl Ppu {
             oam: [0; 256],
             ctrl_register: PpuCtrlRegister::new(),
             addr_register: PpuAddrRegister::new(),
-            data_register: PpuAddrRegister::new(),
             status_register: PpuStatusRegister::new(),
             mirroring,
             buffer: 0,
             cycle: 0,
             scanline: 0,
-            has_nmi: false,
+            has_nmi: None,
         }
     }
 
     pub fn tick(&mut self, cycle: u8) -> bool {
         self.cycle += cycle as usize;
+        debug!("PPU cycle {} scanline {}", self.cycle, self.scanline);
         if self.cycle >= 341 {
             self.cycle -= 341;
             self.scanline += 1;
-            if self.scanline == 241 && self.ctrl_register.nmi_starts_on_vblank_ok() {
+            if self.scanline == 241 {
                 self.status_register.set_vblank(true);
-                self.has_nmi = true;
+                if self.ctrl_register.nmi_starts_on_vblank_ok() {
+                    self.has_nmi = Some(true);
+                }
             }
             if self.scanline >= 262 {
                 self.scanline = 0;
-                self.has_nmi = false;
+                self.has_nmi = None;
                 self.status_register.set_vblank(false);
                 return true;
             }
@@ -57,10 +57,21 @@ impl Ppu {
     }
 
     pub fn write_ppuaddr(&mut self, input: u8) {
+        debug!("write_ppuaddr {:02X}", input);
         self.addr_register.update(input);
     }
     pub fn write_ppudata(&mut self, input: u8) {
-        self.data_register.update(input);
+        let addr = self.addr_register.value;
+        match addr {
+            0..=0x1fff => panic!("cannot write into chr_rom"),
+            0x2000..=0x2fff => {
+                self.vram[self.mirror_vram_addr(addr) as usize] = input;
+            }
+            0x3000..=0x3eff => panic!("not expecting this to be used"),
+            0x3f00..=0x3fff => self.pallete[(addr - 0x3f00) as usize] = input,
+            _ => panic!("unexpected ppudata write to {:02X}", addr),
+        }
+        self.increment_vram();
     }
 
     pub fn write_ppuctrl(&mut self, input: u8) {
@@ -70,7 +81,7 @@ impl Ppu {
             && self.ctrl_register.nmi_starts_on_vblank_ok()
             && self.status_register.is_vblank()
         {
-            self.has_nmi = true;
+            self.has_nmi = Some(true);
         }
     }
 
@@ -85,7 +96,7 @@ impl Ppu {
     fn mirror_vram_addr(&mut self, addr: u16) -> u16 {
         let index = addr - 0x2000;
         let quadrant = index / 0x400;
-        match (quadrant, &self.mirroring) {
+        match (quadrant, !&self.mirroring) {
             (1, false) => index - 0x400,
             (1, true) => index - 0x800,
             (2, false) => index - 0x400,

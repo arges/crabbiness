@@ -52,26 +52,28 @@ async fn main() {
         } else {
             cpu.step()
         };
-        cpu.bus.tick(cycles);
+        let render = cpu.bus.tick(cycles);
 
-        let bank = cpu.bus.ppu.ctrl_register.bg_bank_addr();
-        render::draw_background(&cpu.bus.ppu.chr_rom, &cpu.bus.ram, bank, &mut image);
-        let tex_params = DrawTextureParams {
-            dest_size: Some(vec2(screen_width(), screen_height())),
-            source: None,
-            rotation: 0.0,
-            flip_x: false,
-            flip_y: false,
-            pivot: None,
-        };
-        draw_texture_ex(Texture2D::from_image(&image), 0.0, 0.0, WHITE, tex_params);
-        draw_text(
-            cpu.to_string().as_str(),
-            0.0,
-            screen_height() - 20.0,
-            30.0,
-            WHITE,
-        );
-        next_frame().await
+        if render {
+            let bank = cpu.bus.ppu.ctrl_register.bg_bank_addr();
+            render::draw_background(&cpu.bus.ppu.chr_rom, &cpu.bus.ppu.vram, bank, &mut image);
+            let tex_params = DrawTextureParams {
+                dest_size: Some(vec2(screen_width(), screen_height())),
+                source: None,
+                rotation: 0.0,
+                flip_x: false,
+                flip_y: false,
+                pivot: None,
+            };
+            draw_texture_ex(Texture2D::from_image(&image), 0.0, 0.0, WHITE, tex_params);
+            draw_text(
+                cpu.to_string().as_str(),
+                0.0,
+                screen_height() - 20.0,
+                30.0,
+                WHITE,
+            );
+            next_frame().await
+        }
     }
 }

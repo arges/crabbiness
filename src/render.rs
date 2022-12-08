@@ -26,7 +26,7 @@ fn draw_tile(
     offset_y: u32,
 ) {
     // Select the tile bits from memory
-    let mem_start = bank.wrapping_add(tile_num * 16) as usize;
+    let mem_start = (bank + tile_num * 16) as usize;
     let tile = &chr_rom[mem_start..(mem_start + 16)];
 
     // Iterate through the 8x8 tile and draw the pixels
@@ -47,7 +47,6 @@ fn draw_tile(
 
 pub fn draw_background(chr_rom: &[u8], vram: &[u8; 2048], bank: u16, image: &mut Image) {
     for i in 0..0x03c0 {
-        // just for now, lets use the first nametable
         let tile = vram[i] as u16;
         let tile_x = (i % 32) * 8;
         let tile_y = (i / 32) * 8;
