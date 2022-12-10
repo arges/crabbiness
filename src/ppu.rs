@@ -3,9 +3,9 @@ use log::debug;
 
 pub struct Ppu {
     pub chr_rom: Vec<u8>,
-    pallete: [u8; 32],
+    pub palette: [u8; 32],
     pub vram: [u8; 2048],
-    oam: [u8; 256],
+    pub oam: [u8; 256],
     mirroring: bool,
     pub ctrl_register: PpuCtrlRegister,
     addr_register: PpuAddrRegister,
@@ -20,7 +20,7 @@ impl Ppu {
     pub fn new(chr_rom: Vec<u8>, mirroring: bool) -> Self {
         Self {
             chr_rom,
-            pallete: [0; 32],
+            palette: [0; 32],
             vram: [0; 2048],
             oam: [0; 256],
             ctrl_register: PpuCtrlRegister::new(),
@@ -36,7 +36,7 @@ impl Ppu {
 
     pub fn tick(&mut self, cycle: u8) -> bool {
         self.cycle += cycle as usize;
-        debug!("PPU cycle {} scanline {}", self.cycle, self.scanline);
+        debug!("ppu cycle {} scanline {}", self.cycle, self.scanline);
         if self.cycle >= 341 {
             self.cycle -= 341;
             self.scanline += 1;
@@ -68,7 +68,7 @@ impl Ppu {
                 self.vram[self.mirror_vram_addr(addr) as usize] = input;
             }
             0x3000..=0x3eff => panic!("not expecting this to be used"),
-            0x3f00..=0x3fff => self.pallete[(addr - 0x3f00) as usize] = input,
+            0x3f00..=0x3fff => self.palette[(addr - 0x3f00) as usize] = input,
             _ => panic!("unexpected ppudata write to {:02X}", addr),
         }
         self.increment_vram();
@@ -123,7 +123,7 @@ impl Ppu {
                 result
             }
             0x3000..=0x3eff => panic!("not expecting this to be used"),
-            0x3f00..=0x3fff => self.pallete[(addr - 0x3f00) as usize],
+            0x3f00..=0x3fff => self.palette[(addr - 0x3f00) as usize],
             _ => panic!("unexpected access"),
         }
     }

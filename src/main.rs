@@ -55,8 +55,7 @@ async fn main() {
         let render = cpu.bus.tick(cycles);
 
         if render {
-            let bank = cpu.bus.ppu.ctrl_register.bg_bank_addr();
-            render::draw_background(&cpu.bus.ppu.chr_rom, &cpu.bus.ppu.vram, bank, &mut image);
+            render::draw(&cpu.bus.ppu, &mut image);
             let tex_params = DrawTextureParams {
                 dest_size: Some(vec2(screen_width(), screen_height())),
                 source: None,
