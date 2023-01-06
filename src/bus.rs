@@ -57,7 +57,7 @@ impl Bus {
             0x0000..=0x1fff => self.ram[address as usize % 0x0800] = data,
             0x2000 => self.ppu.write_ppuctrl(data),
 
-            0x2001 => {}
+            0x2001 => self.ppu.write_ppumask(data),
             0x2002 => panic!("attemped to write status reg"),
             0x2003 => {}
             0x2004 => {}

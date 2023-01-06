@@ -8,6 +8,7 @@ pub struct Ppu {
     pub oam: [u8; 256],
     mirroring: bool,
     pub ctrl_register: PpuCtrlRegister,
+    mask_register: PpuMaskRegister,
     addr_register: PpuAddrRegister,
     status_register: PpuStatusRegister,
     buffer: u8,
@@ -24,6 +25,7 @@ impl Ppu {
             vram: [0; 2048],
             oam: [0; 256],
             ctrl_register: PpuCtrlRegister::new(),
+            mask_register: PpuMaskRegister::new(),
             addr_register: PpuAddrRegister::new(),
             status_register: PpuStatusRegister::new(),
             mirroring,
@@ -56,10 +58,16 @@ impl Ppu {
         false
     }
 
+    pub fn write_ppumask(&mut self, input: u8) {
+        debug!("write_ppumask {:02X}", input);
+        self.mask_register.update(input);
+    }
+
     pub fn write_ppuaddr(&mut self, input: u8) {
         debug!("write_ppuaddr {:02X}", input);
         self.addr_register.update(input);
     }
+
     pub fn write_ppudata(&mut self, input: u8) {
         let addr = self.addr_register.value;
         match addr {
@@ -68,6 +76,9 @@ impl Ppu {
                 self.vram[self.mirror_vram_addr(addr) as usize] = input;
             }
             0x3000..=0x3eff => panic!("not expecting this to be used"),
+            0x3f10 | 0x3f14 | 0x3f18 | 0x3f1c => {
+                self.palette[(addr - 0x3f00 - 0x10) as usize] = input
+            }
             0x3f00..=0x3fff => self.palette[(addr - 0x3f00) as usize] = input,
             _ => panic!("unexpected ppudata write to {:02X}", addr),
         }
@@ -76,7 +87,7 @@ impl Ppu {
 
     pub fn write_ppuctrl(&mut self, input: u8) {
         let before = self.ctrl_register.nmi_starts_on_vblank_ok();
-        self.ctrl_register.bits = input;
+        self.ctrl_register.update(input);
         if !before
             && self.ctrl_register.nmi_starts_on_vblank_ok()
             && self.status_register.is_vblank()
@@ -110,7 +121,7 @@ impl Ppu {
     pub fn read_data(&mut self) -> u8 {
         self.increment_vram();
         let addr = self.addr_register.value;
-
+        debug!("read_data addr {:04X}", addr);
         match addr {
             0..=0x1fff => {
                 let result = self.buffer;
@@ -123,6 +134,7 @@ impl Ppu {
                 result
             }
             0x3000..=0x3eff => panic!("not expecting this to be used"),
+            0x3f10 | 0x3f14 | 0x3f18 | 0x3f1c => self.palette[(addr - 0x3f00 - 0x10) as usize],
             0x3f00..=0x3fff => self.palette[(addr - 0x3f00) as usize],
             _ => panic!("unexpected access"),
         }
@@ -150,6 +162,7 @@ impl PpuAddrRegister {
             self.value = u16::from_le_bytes([data, b[1]]);
         }
         self.latch = !self.latch;
+        debug!("update ppuaddr {:04X}", self.value);
     }
 
     pub fn inc(&mut self, input: u8) {
@@ -257,5 +270,27 @@ impl PpuStatusRegister {
 
     pub fn read(&self) -> u8 {
         self.bits()
+    }
+}
+
+bitflags! {
+    pub struct PpuMaskRegister: u8 {
+        const EMPHASIZE_RED = 0b0010_0000;
+        const EMPHASIZE_GREEN = 0b0100_0000;
+        const EMPHASIZE_BLUE = 0b1000_0000;
+    }
+}
+
+impl PpuMaskRegister {
+    pub fn new() -> Self {
+        PpuMaskRegister::empty()
+    }
+
+    pub fn read(&self) -> u8 {
+        self.bits()
+    }
+
+    pub fn update(&mut self, data: u8) {
+        self.bits = data;
     }
 }

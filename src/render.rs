@@ -25,7 +25,7 @@ pub static DEFAULT_PALETTE: [(u8,u8,u8); 64] = [
 /// apply to that particular tile. Those two bytes select the
 /// palette table which are offset from 0x3f00 by one byte.
 fn palette_start(row: usize, column: usize, attribute: u8) -> usize {
-    let shift = (row % 2) * 2 + (column % 2);
+    let shift = (((row % 4) / 2) << 1) * 2 + ((column % 4) / 2) * 2;
     (1 + ((attribute >> shift) & 0b11) * 4) as usize
 }
 
