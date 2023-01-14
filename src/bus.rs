@@ -41,6 +41,7 @@ impl Bus {
                 panic!("Attempt to read from write-only PPU address {:x}", address);
             }
             0x2002 => self.ppu.read_ppustatus(),
+            0x2004 => self.ppu.read_oamdata(),
             0x2007 => self.ppu.read_data(),
             0x4016 | 0x4017 => {
                 // TODO joypads
@@ -59,8 +60,9 @@ impl Bus {
 
             0x2001 => self.ppu.write_ppumask(data),
             0x2002 => panic!("attemped to write status reg"),
-            0x2003 => {}
-            0x2004 => {}
+            0x2003 => self.ppu.write_oamaddr(data),
+            0x2004 => self.ppu.write_oamdata(data),
+
             0x2005 => {}
 
             0x2006 => self.ppu.write_ppuaddr(data),
@@ -69,9 +71,20 @@ impl Bus {
                 self.write_u8(address & 0x2007, data);
             }
 
-            0x4000..=0x4015 => {
+            0x4000..=0x4013 => {
                 // TODO: implement APU
             }
+
+            0x4014 => {
+                let mut buffer: [u8; 256] = [0; 256];
+                let start = (data as u16) << 8;
+                for i in 0..256u16 {
+                    buffer[i as usize] = self.read_u8(start + i);
+                }
+                self.ppu.write_oamdata_dma(&buffer);
+            }
+
+            0x4015 => {}
             0x4016 | 0x4017 => {
                 // TODO joypads
             }

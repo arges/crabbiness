@@ -1,4 +1,5 @@
 use crate::ppu::Ppu;
+use bitflags::bitflags;
 use macroquad::color::*;
 use macroquad::prelude::*;
 
@@ -94,11 +95,75 @@ fn draw_background(ppu: &Ppu, image: &mut Image) {
     }
 }
 
+fn sprite_palette(ppu: &Ppu, index: u8) -> [u8; 4] {
+    let start = 0x11 + (index * 4) as usize;
+    [
+        0,
+        ppu.palette[start],
+        ppu.palette[start + 1],
+        ppu.palette[start + 2],
+    ]
+}
+
+/// draw single sprite tile
+///
+/// similar to draw_background_tile, this function handles sprites with
+/// transparency and flipping.
+fn draw_sprite_tile(
+    ppu: &Ppu,
+    bank: u16,
+    tile_num: u8,
+    image: &mut Image,
+    attr: u8,
+    tile_x: u8,
+    tile_y: u8,
+) {
+    // Select the tile bits from memory
+    let mem_start = (bank + tile_num as u16 * 16) as usize;
+    let tile = &ppu.chr_rom[mem_start..(mem_start + 16)];
+    let palette = sprite_palette(ppu, attr & 0b11);
+
+    // Iterate through the 8x8 tile and draw the pixels
+    for y in 0..8 {
+        let upper = tile[y];
+        let lower = tile[y + 8];
+        for x in 0..8 {
+            let (r, g, b) = match (lower & (1 << x) > 0, upper & (1 << x) > 0) {
+                (false, false) => continue,
+                (false, true) => DEFAULT_PALETTE[palette[1] as usize],
+                (true, false) => DEFAULT_PALETTE[palette[2] as usize],
+                (true, true) => DEFAULT_PALETTE[palette[3] as usize],
+            };
+            let pixel_x = if (attr & 0x40) == 0x40 {
+                tile_x + x
+            } else {
+                tile_x + (7 - x)
+            };
+            let pixel_y = if (attr & 0x80) == 0x00 {
+                tile_y + y as u8
+            } else {
+                tile_y + (7 - y as u8)
+            };
+            image.set_pixel(pixel_x as u32, pixel_y as u32, color_u8!(r, g, b, 255))
+        }
+    }
+}
+
 /// draws the sprite layer
-fn draw_sprites(ppu: &Ppu, image: &mut Image) {}
+fn draw_sprites(ppu: &Ppu, image: &mut Image) {
+    for i in (0..ppu.oam.len()).step_by(4) {
+        let y = ppu.oam[i];
+        let tile_num = ppu.oam[i + 1];
+        let x = ppu.oam[i + 3];
+        let attr = ppu.oam[i + 2];
+        let bank = ppu.ctrl_register.sprite_bank_addr();
+
+        draw_sprite_tile(ppu, bank, tile_num, image, attr, x, y);
+    }
+}
 
 /// renders the entire frame
 pub fn draw(ppu: &Ppu, image: &mut Image) {
     draw_background(ppu, image);
-    //draw_sprites(ppu, image);
+    draw_sprites(ppu, image);
 }

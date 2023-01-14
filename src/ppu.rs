@@ -6,6 +6,7 @@ pub struct Ppu {
     pub palette: [u8; 32],
     pub vram: [u8; 2048],
     pub oam: [u8; 256],
+    pub oam_addr: u8,
     mirroring: bool,
     pub ctrl_register: PpuCtrlRegister,
     mask_register: PpuMaskRegister,
@@ -24,6 +25,7 @@ impl Ppu {
             palette: [0; 32],
             vram: [0; 2048],
             oam: [0; 256],
+            oam_addr: 0,
             ctrl_register: PpuCtrlRegister::new(),
             mask_register: PpuMaskRegister::new(),
             addr_register: PpuAddrRegister::new(),
@@ -56,6 +58,27 @@ impl Ppu {
             }
         }
         false
+    }
+
+    pub fn read_oamdata(&self) -> u8 {
+        self.oam[self.oam_addr as usize] as u8
+    }
+
+    pub fn write_oamdata(&mut self, input: u8) {
+        self.oam[self.oam_addr as usize] = input;
+        self.oam_addr = self.oam_addr.wrapping_add(1);
+    }
+
+    pub fn write_oamaddr(&mut self, addr: u8) {
+        self.oam_addr = addr;
+    }
+
+    pub fn write_oamdata_dma(&mut self, data: &[u8; 256]) {
+        debug!("write_oamdata_dma {:?}", data);
+        for x in data {
+            self.oam[self.oam_addr as usize] = *x;
+            self.oam_addr = self.oam_addr.wrapping_add(1);
+        }
     }
 
     pub fn write_ppumask(&mut self, input: u8) {
