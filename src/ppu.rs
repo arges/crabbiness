@@ -7,7 +7,7 @@ pub struct Ppu {
     pub vram: [u8; 2048],
     pub oam: [u8; 256],
     pub oam_addr: u8,
-    mirroring: bool,
+    mirroring: bool, // false horizontal, true vertical
     pub ctrl_register: PpuCtrlRegister,
     mask_register: PpuMaskRegister,
     addr_register: PpuAddrRegister,
@@ -130,13 +130,12 @@ impl Ppu {
     fn mirror_vram_addr(&mut self, addr: u16) -> u16 {
         let index = addr - 0x2000;
         let quadrant = index / 0x400;
-        match (quadrant, !&self.mirroring) {
-            (1, false) => index - 0x400,
-            (1, true) => index - 0x800,
-            (2, false) => index - 0x400,
-            (2, true) => index - 0x800,
-            (3, false) => index - 0x800,
-            (3, true) => index - 0x800,
+        match (self.mirroring, quadrant) {
+            (false, 1) => index - 0x400,
+            (false, 2) => index - 0x400,
+            (false, 3) => index - 0x800,
+            (true, 2) => index - 0x800,
+            (true, 3) => index - 0x800,
             _ => index,
         }
     }
@@ -212,6 +211,18 @@ mod tests {
         assert_eq!(addr_reg.value, 0x0650);
         addr_reg.inc(0xa);
         assert_eq!(addr_reg.value, 0x065a);
+    }
+
+    #[rstest]
+    #[case(false, 0x2000, 0x0000)]
+    #[case(false, 0x2800, 0x0800)]
+    #[case(false, 0x2c00, 0x0800)]
+    #[case(true, 0x2400, 0x0400)]
+    #[case(true, 0x2c00, 0x0400)]
+    fn test_mirror_vram_addr(#[case] mirroring: bool, #[case] input: u16, #[case] expected: u16) {
+        let mut ppu = Ppu::new(vec![], mirroring);
+        let output = ppu.mirror_vram_addr(input);
+        assert_eq!(output, expected);
     }
 }
 

@@ -1783,7 +1783,7 @@ impl Cpu {
 
         self.cycles = self.cycles.wrapping_add(instruction.cycles as u64);
 
-        println!("{:04X}  {}   {}", self.pc, instruction_bytes, self);
+        debug!("{:04X}  {}   {}", self.pc, instruction_bytes, self);
         self.execute(&instruction_bytes);
         instruction.cycles
     }
