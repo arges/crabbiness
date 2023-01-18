@@ -11,6 +11,7 @@ use std::{fs, thread};
 use macroquad::prelude::*;
 
 mod bus;
+mod controller;
 mod cpu;
 mod ppu;
 mod render;
@@ -54,6 +55,9 @@ async fn main() {
         };
         let render = cpu.bus.tick(cycles);
 
+        // get controller input from keyboard
+        cpu.bus.read_keys();
+
         if render {
             render::draw(&cpu.bus.ppu, &mut image);
             let tex_params = DrawTextureParams {
@@ -72,6 +76,14 @@ async fn main() {
                 30.0,
                 WHITE,
             );
+            draw_text(
+                cpu.bus.controller.to_string().as_str(),
+                0.0,
+                screen_height() - 70.0,
+                30.0,
+                GRAY,
+            );
+
             next_frame().await
         }
     }

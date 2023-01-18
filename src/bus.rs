@@ -1,3 +1,4 @@
+use crate::controller::Controller;
 use crate::ppu::Ppu;
 use crate::rom::Rom;
 use log::debug;
@@ -7,6 +8,7 @@ pub struct Bus {
     pub ram: [u8; 2048],
     rom: Rom,
     pub ppu: Ppu,
+    pub controller: Controller,
     cycle: usize,
 }
 
@@ -19,6 +21,7 @@ impl Bus {
             rom,
             ppu,
             cycle: 0,
+            controller: Controller::new(),
         }
     }
 
@@ -27,6 +30,10 @@ impl Bus {
         let before = self.ppu.has_nmi.is_some();
         self.ppu.tick(cycle * 3);
         !before && self.ppu.has_nmi.is_some()
+    }
+
+    pub fn read_keys(&mut self) {
+        self.controller.read_keys()
     }
 
     pub fn take_nmi(&mut self) -> bool {
@@ -38,15 +45,13 @@ impl Bus {
         match address {
             0x0000..=0x1fff => self.ram[address as usize % 0x0800],
             0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 | 0x4014 => {
-                panic!("Attempt to read from write-only PPU address {:x}", address);
+                panic!("attempt to read from write-only PPU address {:x}", address);
             }
             0x2002 => self.ppu.read_ppustatus(),
             0x2004 => self.ppu.read_oamdata(),
             0x2007 => self.ppu.read_data(),
-            0x4016 | 0x4017 => {
-                // TODO joypads
-                0
-            }
+            0x4016 => self.controller.read(),
+            0x4017 => 0, // TODO player 2
             0x2008..=0x3fff => self.read_u8(address & 0x2007),
             0x8000..=0xffff => self.rom.read_byte(address),
             _ => panic!("invalid read address {:04X}", address),
@@ -70,11 +75,7 @@ impl Bus {
             0x2008..=0x3fff => {
                 self.write_u8(address & 0x2007, data);
             }
-
-            0x4000..=0x4013 => {
-                // TODO: implement APU
-            }
-
+            0x4000..=0x4013 => {} // TODO implement APU
             0x4014 => {
                 let mut buffer: [u8; 256] = [0; 256];
                 let start = (data as u16) << 8;
@@ -83,11 +84,9 @@ impl Bus {
                 }
                 self.ppu.write_oamdata_dma(&buffer);
             }
-
             0x4015 => {}
-            0x4016 | 0x4017 => {
-                // TODO joypads
-            }
+            0x4016 => self.controller.write(data),
+            0x4017 => {} // TODO player 2
             _ => panic!("invalid write address {:04X}", address),
         }
     }
