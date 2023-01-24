@@ -12,6 +12,7 @@ pub struct Ppu {
     mask_register: PpuMaskRegister,
     addr_register: PpuAddrRegister,
     status_register: PpuStatusRegister,
+    scroll_register: PpuScrollRegister,
     buffer: u8,
     cycle: usize,
     scanline: u16,
@@ -30,6 +31,7 @@ impl Ppu {
             mask_register: PpuMaskRegister::new(),
             addr_register: PpuAddrRegister::new(),
             status_register: PpuStatusRegister::new(),
+            scroll_register: PpuScrollRegister::new(),
             mirroring,
             buffer: 0,
             cycle: 0,
@@ -84,6 +86,10 @@ impl Ppu {
         }
     }
 
+    pub fn write_scrolldata(&mut self, input: u8) {
+        self.scroll_register.write(input);
+    }
+
     pub fn write_ppumask(&mut self, input: u8) {
         self.mask_register.update(input);
     }
@@ -121,7 +127,11 @@ impl Ppu {
     }
 
     pub fn read_ppustatus(&mut self) -> u8 {
-        self.status_register.read()
+        let ret = self.status_register.read();
+        self.scroll_register.reset();
+        self.addr_register.reset();
+        self.status_register.set_vblank(false);
+        ret
     }
 
     fn increment_vram(&mut self) {
@@ -198,11 +208,11 @@ impl PpuAddrRegister {
     }
 
     pub fn inc(&mut self, input: u8) {
-        self.value = self.value.wrapping_add(input as u16);
+        self.value = self.value.wrapping_add(input as u16) & 0x3fff;
     }
 
     pub fn reset(&mut self) {
-        self.latch = false;
+        self.latch = true;
     }
 }
 
@@ -341,5 +351,33 @@ impl PpuMaskRegister {
 
     pub fn update(&mut self, data: u8) {
         self.bits = data;
+    }
+}
+
+pub struct PpuScrollRegister {
+    x: u8,
+    y: u8,
+    latch: bool,
+}
+
+impl PpuScrollRegister {
+    pub fn new() -> Self {
+        PpuScrollRegister {
+            x: 0,
+            y: 0,
+            latch: false,
+        }
+    }
+    pub fn write(&mut self, data: u8) {
+        if self.latch {
+            self.x = data;
+        } else {
+            self.y = data;
+        }
+        self.latch = !self.latch;
+    }
+
+    pub fn reset(&mut self) {
+        self.latch = false;
     }
 }

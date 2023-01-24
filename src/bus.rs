@@ -75,9 +75,7 @@ impl Bus {
             0x2002 => panic!("attemped to write status reg"),
             0x2003 => self.ppu.write_oamaddr(data),
             0x2004 => self.ppu.write_oamdata(data),
-
-            0x2005 => {}
-
+            0x2005 => self.ppu.write_scrolldata(data),
             0x2006 => self.ppu.write_ppuaddr(data),
             0x2007 => self.ppu.write_ppudata(data),
             0x2008..=0x3fff => {
