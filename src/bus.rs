@@ -13,6 +13,11 @@ pub struct Bus {
 }
 
 impl Bus {
+    /// Implements the 'bus' connecting PPU, CPU, RAM and controllers
+    ///
+    /// Normally each component in the NES would be independent operating on clocks and various
+    /// signals passed via a 'bus'. In this implementation functions act more syncronously and
+    /// timings are guided by cycles and ticks.
     pub fn new(rom: Rom) -> Self {
         let ppu = Ppu::new(rom.chr_rom.clone(), rom.mirroring());
 
@@ -32,6 +37,7 @@ impl Bus {
         !before && self.ppu.has_nmi.is_some()
     }
 
+    /// actively poll for new keys and update internal data
     pub fn read_keys(&mut self) {
         self.controller.read_keys()
     }
@@ -40,6 +46,7 @@ impl Bus {
         self.ppu.has_nmi.take() == Some(true)
     }
 
+    /// reads a byte matches the address to the correct component on the bus
     pub fn read_u8(&mut self, address: u16) -> u8 {
         debug!("reading @ {:04x}", address);
         match address {
@@ -58,6 +65,7 @@ impl Bus {
         }
     }
 
+    /// write a byte matches the address to the correct component on the bus
     pub fn write_u8(&mut self, address: u16, data: u8) {
         match address {
             0x0000..=0x1fff => self.ram[address as usize % 0x0800] = data,
@@ -91,11 +99,13 @@ impl Bus {
         }
     }
 
+    /// reads 16 bits by calling read_u8 twice
     pub fn read_u16(&mut self, address: u16) -> u16 {
         (self.read_u8(address.wrapping_add(0)) as u16)
             | ((self.read_u8(address.wrapping_add(1)) as u16) << 8)
     }
 
+    /// reads an abitrary number of bytes by calling read_u8 in a loop
     pub fn read_bytes(&mut self, address: u16, size: u8) -> Vec<u8> {
         let mut bytes = vec![0; size as usize];
         for i in 0..size {

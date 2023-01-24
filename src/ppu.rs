@@ -78,7 +78,6 @@ impl Ppu {
     }
 
     pub fn write_oamdata_dma(&mut self, data: &[u8; 256]) {
-        debug!("write_oamdata_dma {:?}", data);
         for x in data {
             self.oam[self.oam_addr as usize] = *x;
             self.oam_addr = self.oam_addr.wrapping_add(1);
@@ -86,12 +85,10 @@ impl Ppu {
     }
 
     pub fn write_ppumask(&mut self, input: u8) {
-        debug!("write_ppumask {:02X}", input);
         self.mask_register.update(input);
     }
 
     pub fn write_ppuaddr(&mut self, input: u8) {
-        debug!("write_ppuaddr {:02X}", input);
         self.addr_register.update(input);
     }
 
@@ -158,7 +155,6 @@ impl Ppu {
     pub fn read_data(&mut self) -> u8 {
         let addr = self.addr_register.value;
         self.increment_vram();
-        debug!("read_data addr {:04X}", addr);
         match addr {
             0..=0x1fff => {
                 let result = self.buffer;
@@ -199,7 +195,6 @@ impl PpuAddrRegister {
             self.value = u16::from_le_bytes([data, b[1]]);
         }
         self.latch = !self.latch;
-        debug!("update ppuaddr {:04X}", self.value);
     }
 
     pub fn inc(&mut self, input: u8) {

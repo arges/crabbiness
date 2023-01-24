@@ -30,10 +30,10 @@ fn palette_start(row: usize, column: usize, attribute: u8) -> usize {
     (1 + ((attribute >> shift) & 0b11) * 4) as usize
 }
 
-// returns the palette indicies for a given tile
-//
-// Given a tile row and column, select the attribute space for the
-// 4x4 tile region. Then select and return the palette table.
+/// returns the palette indicies for a given tile
+///
+/// Given a tile row and column, select the attribute space for the
+/// 4x4 tile region. Then select and return the palette table.
 fn background_palette(ppu: &Ppu, row: usize, column: usize) -> [u8; 4] {
     let index = (row / 4 * 8) + (column / 4);
     let attr = ppu.vram[0x3c0 + index];

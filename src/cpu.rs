@@ -2,9 +2,6 @@
 #![allow(unused_variables)]
 #![allow(dead_code)]
 
-// https://www.masswerk.at/6502/6502_instruction_set.html
-// http://www.6502.org/tutorials/6502opcodes.html
-
 use crate::bus::Bus;
 use crate::cpu::AddressingMode::{
     Absolute, AbsoluteX, AbsoluteY, Accumulator, Immediate, Implied, Indirect, IndirectX,
@@ -207,6 +204,12 @@ impl Display for Opcode {
 }
 
 impl Cpu {
+    /// Implements the CPU registers, instruction decoding and execution.
+    /// Also modified memory and handles cycle calculations.
+    ///
+    /// Good CPU referencs can be found here:
+    /// - https://www.masswerk.at/6502/6502_instruction_set.html
+    /// - http://www.6502.org/tutorials/6502opcodes.html
     pub fn new(bus: Bus) -> Self {
         Cpu {
             pc: 0,
@@ -343,6 +346,7 @@ impl Cpu {
         }
     }
 
+    /// given InstructionBytes execute and modify the CPU state
     fn execute(&mut self, b: &InstructionBytes) {
         let mut new_pc = self.pc.wrapping_add((b.instruction.length) as u16);
         match b.instruction.opcode {
@@ -448,7 +452,6 @@ impl Cpu {
                 new_pc = self.stack_pop_u16();
                 self.clear_flag(Flag::Break);
                 self.set_flag(Flag::Unused);
-                // TODO write tests
             }
             Opcode::Jsr => {
                 let tgt_addr = self.get_operand_address(b);
@@ -456,32 +459,26 @@ impl Cpu {
                 self.stack_push_u16(ret_addr);
                 debug!("jsr tgt_addr {:04X} ret_addr {:04X}", tgt_addr, ret_addr);
                 new_pc = tgt_addr;
-                // TODO write tests
             }
             Opcode::Rts => {
                 new_pc = self.stack_pop_u16().wrapping_add(1);
                 debug!("rts new_pc {:04X}", new_pc);
-                // TODO write tests
             }
 
             Opcode::Cmp => {
                 self.compare(b, self.a);
-                // TODO write tests
             }
             Opcode::Cpx => {
                 self.compare(b, self.x);
-                // TODO write tests
             }
             Opcode::Cpy => {
                 self.compare(b, self.y);
-                // TODO write tests
             }
             Opcode::Dec => {
                 let addr = self.get_operand_address(b);
                 let value = self.bus.read_u8(addr).wrapping_sub(1);
                 self.bus.write_u8(addr, value);
                 self.set_zero_negative_flags(value);
-                // TODO write tests
             }
             Opcode::Dex => {
                 self.x = self.x.wrapping_sub(1);
@@ -648,8 +645,8 @@ impl Cpu {
 
     /// get_operand returns either a value or address depending on mode
     /// references:
-    /// https://www.nesdev.org/wiki/CPU_addressing_modes
-    /// http://www.emulator101.com/6502-addressing-modes.html
+    /// - https://www.nesdev.org/wiki/CPU_addressing_modes
+    /// - http://www.emulator101.com/6502-addressing-modes.html
     fn get_operand_address(&mut self, b: &InstructionBytes) -> u16 {
         match b.instruction.mode {
             ZeroPage => b.get_immediate() as u16,
@@ -688,7 +685,8 @@ impl Cpu {
     }
 
     /// decode takes in an opcode and outputs an instruction structure
-    /// reference: https://www.nesdev.org/obelisk-6502-guide/reference.html
+    /// reference:
+    /// - https://www.nesdev.org/obelisk-6502-guide/reference.html
     fn decode(&self, opcode: u8) -> Instruction {
         match opcode {
             // ADC (Add Memory to Accumulator with Carry)
@@ -2118,7 +2116,4 @@ mod tests {
         cpu.step();
         assert_eq!(cpu.pc, 0xaa00);
     }
-
-    // TODO: write tests for RTS/JTS
-    // TODO add more tests
 }
