@@ -12,7 +12,7 @@ pub struct Ppu {
     mask_register: PpuMaskRegister,
     addr_register: PpuAddrRegister,
     status_register: PpuStatusRegister,
-    scroll_register: PpuScrollRegister,
+    pub scroll_register: PpuScrollRegister,
     buffer: u8,
     cycle: usize,
     scanline: u16,
@@ -20,6 +20,9 @@ pub struct Ppu {
 }
 
 impl Ppu {
+    /// implements the Picture Processing Unit
+    ///
+    /// This contains the registers, vram, chr_rom, pallets and oam data for graphics.
     pub fn new(chr_rom: Vec<u8>, mirroring: bool) -> Self {
         Self {
             chr_rom,
@@ -149,6 +152,8 @@ impl Ppu {
         );
     }
 
+    /// calculates the mirrored vram addressed based on mirror modes
+    /// this supports a limited set of mirroring modes only horizontal and veritcal
     fn mirror_vram_addr(&mut self, addr: u16) -> u16 {
         let index = addr - 0x2000;
         let quadrant = index / 0x400;
@@ -159,6 +164,23 @@ impl Ppu {
             (true, 2) => index - 0x800,
             (true, 3) => index - 0x800,
             _ => index,
+        }
+    }
+
+    /// returns the regions of memory for rendering background
+    pub fn get_background_addrs(&self) -> (&[u8], &[u8]) {
+        match (self.mirroring, self.ctrl_register.base_addr()) {
+            (false, 0x2000) | (false, 0x2400) | (true, 0x2000) | (true, 0x2800) => {
+                (&self.vram[0..0x400], &self.vram[0x400..0x800])
+            }
+            (false, 0x2800) | (false, 0x2c00) | (true, 0x2400) | (true, 0x2c00) => {
+                (&self.vram[0x400..0x800], &self.vram[0..0x400])
+            }
+            (_, _) => panic!(
+                "not supported {} {}",
+                self.mirroring,
+                self.ctrl_register.base_addr()
+            ),
         }
     }
 
@@ -355,8 +377,8 @@ impl PpuMaskRegister {
 }
 
 pub struct PpuScrollRegister {
-    x: u8,
-    y: u8,
+    pub x: u8,
+    pub y: u8,
     latch: bool,
 }
 

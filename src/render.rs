@@ -20,6 +20,28 @@ pub static DEFAULT_PALETTE: [(u8,u8,u8); 64] = [
    (0x99, 0xFF, 0xFC), (0xDD, 0xDD, 0xDD), (0x11, 0x11, 0x11), (0x11, 0x11, 0x11)
 ];
 
+struct View {
+    x1: usize,
+    y1: usize,
+    x2: usize,
+    y2: usize,
+    offset_x: isize,
+    offset_y: isize,
+}
+
+impl View {
+    fn new(x1: usize, y1: usize, x2: usize, y2: usize, offset_x: isize, offset_y: isize) -> Self {
+        View {
+            x1,
+            y1,
+            x2,
+            y2,
+            offset_x,
+            offset_y,
+        }
+    }
+}
+
 /// returns the starting palette address given row and column
 ///
 /// Given a 2x2 grid, select the 2 bits within the attribute that
@@ -58,6 +80,7 @@ fn draw_background_tile(
     image: &mut Image,
     row: u32,
     column: u32,
+    view: &View,
 ) {
     // Select the tile bits from memory
     let mem_start = (bank + tile_num * 16) as usize;
@@ -85,13 +108,13 @@ fn draw_background_tile(
 }
 
 /// draws the background layer
-fn draw_background(ppu: &Ppu, image: &mut Image) {
+fn draw_background(ppu: &Ppu, image: &mut Image, view: &View) {
     let bank = ppu.ctrl_register.bg_bank_addr();
     for i in 0..0x03c0 {
         let tile = ppu.vram[i] as u16;
         let row = i / 32;
         let column = i % 32;
-        draw_background_tile(ppu, bank, tile, image, row as u32, column as u32);
+        draw_background_tile(ppu, bank, tile, image, row as u32, column as u32, view);
     }
 }
 
@@ -164,6 +187,20 @@ fn draw_sprites(ppu: &Ppu, image: &mut Image) {
 
 /// renders the entire frame
 pub fn draw(ppu: &Ppu, image: &mut Image) {
-    draw_background(ppu, image);
+    let (scroll_x, scroll_y) = (ppu.scroll_register.x, ppu.scroll_register.y);
+    let (main_background, second_background) = ppu.get_background_addrs();
+
+    draw_background(
+        ppu,
+        image,
+        &View::new(
+            scroll_x as usize,
+            scroll_y as usize,
+            256,
+            240,
+            -(scroll_x as isize),
+            -(scroll_y as isize),
+        ),
+    );
     draw_sprites(ppu, image);
 }
