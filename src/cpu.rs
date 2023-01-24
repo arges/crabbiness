@@ -562,7 +562,7 @@ impl Cpu {
 
             Opcode::Lda => {
                 self.a = self.get_operand(b) as u8;
-                debug!("LDA a is {:02x}\n", self.a);
+                debug!("LDA a is {:02x}", self.a);
                 self.set_zero_negative_flags(self.a);
             }
 

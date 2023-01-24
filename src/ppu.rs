@@ -43,9 +43,12 @@ impl Ppu {
         debug!("ppu cycle {} scanline {}", self.cycle, self.scanline);
         if self.cycle >= 341 {
             self.cycle -= 341;
+            self.set_sprite0_hit();
+
             self.scanline += 1;
             if self.scanline == 241 {
                 self.status_register.set_vblank(true);
+                self.status_register.clear_sprite0();
                 if self.ctrl_register.nmi_starts_on_vblank_ok() {
                     self.has_nmi = Some(true);
                 }
@@ -53,6 +56,7 @@ impl Ppu {
             if self.scanline >= 262 {
                 self.scanline = 0;
                 self.has_nmi = None;
+                self.status_register.clear_sprite0();
                 self.status_register.set_vblank(false);
                 return true;
             }
@@ -127,6 +131,17 @@ impl Ppu {
         self.addr_register.inc(self.ctrl_register.vram_inc());
     }
 
+    /// check and update mask register show_sprites bit
+    fn set_sprite0_hit(&mut self) {
+        let (x, y) = (self.oam[3], self.oam[0]);
+        self.status_register.set(
+            PpuStatusRegister::SPRITE_0_HIT,
+            y as u16 == self.scanline
+                && x as usize <= self.cycle
+                && self.mask_register.contains(PpuMaskRegister::SHOW_SPRITES),
+        );
+    }
+
     fn mirror_vram_addr(&mut self, addr: u16) -> u16 {
         let index = addr - 0x2000;
         let quadrant = index / 0x400;
@@ -141,8 +156,8 @@ impl Ppu {
     }
 
     pub fn read_data(&mut self) -> u8 {
-        self.increment_vram();
         let addr = self.addr_register.value;
+        self.increment_vram();
         debug!("read_data addr {:04X}", addr);
         match addr {
             0..=0x1fff => {
@@ -302,6 +317,10 @@ impl PpuStatusRegister {
         self.contains(PpuStatusRegister::VBLANK_START)
     }
 
+    pub fn clear_sprite0(&mut self) {
+        self.set(PpuStatusRegister::SPRITE_0_HIT, false);
+    }
+
     pub fn read(&self) -> u8 {
         self.bits()
     }
@@ -309,6 +328,7 @@ impl PpuStatusRegister {
 
 bitflags! {
     pub struct PpuMaskRegister: u8 {
+        const SHOW_SPRITES = 0b0001_0000;
         const EMPHASIZE_RED = 0b0010_0000;
         const EMPHASIZE_GREEN = 0b0100_0000;
         const EMPHASIZE_BLUE = 0b1000_0000;

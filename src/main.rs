@@ -84,6 +84,14 @@ async fn main() {
                 GRAY,
             );
 
+            draw_text(
+                format!("{}", get_fps()).trim(),
+                screen_width() - 30.0,
+                screen_height() - 20.0,
+                30.0,
+                GREEN,
+            );
+
             next_frame().await
         }
     }
