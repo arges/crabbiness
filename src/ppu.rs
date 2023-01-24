@@ -257,8 +257,8 @@ mod tests {
 
     #[rstest]
     #[case(false, 0x2000, 0x0000)]
-    #[case(false, 0x2800, 0x0800)]
-    #[case(false, 0x2c00, 0x0800)]
+    #[case(false, 0x2800, 0x0400)]
+    #[case(false, 0x2c00, 0x0400)]
     #[case(true, 0x2400, 0x0400)]
     #[case(true, 0x2c00, 0x0400)]
     fn test_mirror_vram_addr(#[case] mirroring: bool, #[case] input: u16, #[case] expected: u16) {

@@ -1811,7 +1811,7 @@ mod tests {
 
     fn test_program(instructions: Vec<u8>) -> Vec<u8> {
         let mut prog: Vec<u8> = instructions.to_vec();
-        prog.append(&mut vec![0; 0x3ffc - instructions.len()]);
+        prog.append(&mut vec![0; 0x7ffc - instructions.len()]);
         prog.append(&mut vec![0x00, 0x80]);
         prog
     }
@@ -1836,10 +1836,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case(vec![0x10, 0x10], 0xc000, 0b1000_0000, 0b1000_0000, 0xc002)]
-    #[case(vec![0x10, 0x10], 0xc000, 0b0000_0000, 0b0000_0000, 0xc012)]
-    #[case(vec![0x10, 0xFB], 0xc000, 0b0000_0000, 0b0000_0000, 0xbffd)]
-    #[case(vec![0xf0, 0x32], 0xc000, 0b1110_1111, 0b1110_1111, 0xc034)]
+    #[case(vec![0x10, 0x10], 0x8000, 0b1000_0000, 0b1000_0000, 0x8002)]
+    #[case(vec![0x10, 0x10], 0x8000, 0b0000_0000, 0b0000_0000, 0x8012)]
+    #[case(vec![0x10, 0xFB], 0x8000, 0b0000_0000, 0b0000_0000, 0x7ffd)]
+    #[case(vec![0xf0, 0x32], 0x8000, 0b1110_1111, 0b1110_1111, 0x8034)]
 
     fn test_branches(
         #[case] in_prg: Vec<u8>,
@@ -2021,8 +2021,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case(vec![0x2c, 0x03, 0xc0, 0xf0], 0xf0, 0b00000000, 0xf0, 0b11000000)]
-    #[case(vec![0x2c, 0x03, 0xc0, 0x00], 0xf0, 0b00000000, 0xf0, 0b00000010)]
+    #[case(vec![0x2c, 0x03, 0x80, 0xf0], 0xf0, 0b00000000, 0xf0, 0b11000000)]
+    #[case(vec![0x2c, 0x03, 0x80, 0x00], 0xf0, 0b00000000, 0xf0, 0b00000010)]
     fn test_bit(
         #[case] in_prg: Vec<u8>,
         #[case] in_a: u8,
@@ -2105,15 +2105,13 @@ mod tests {
     }
 
     #[test]
-    fn test_nmi() {
+    fn test_brk() {
         let mut prog: Vec<u8> = vec![0x00];
-        prog.append(&mut vec![0; 0x3ffa - 1]);
+        prog.append(&mut vec![0; 0x3ff9]);
+        prog.append(&mut vec![0x00, 0x00]);
+        prog.append(&mut vec![0x00, 0x00]);
         prog.append(&mut vec![0x00, 0xaa]);
-        prog.append(&mut vec![0x00, 0x80]);
-
         let mut cpu = setup_cpu(prog);
-        cpu.reset();
-        cpu.step();
-        assert_eq!(cpu.pc, 0xaa00);
+        assert_eq!(cpu.brk(), 0xaa00);
     }
 }
