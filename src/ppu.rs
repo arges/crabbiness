@@ -391,7 +391,7 @@ impl PpuScrollRegister {
         }
     }
     pub fn write(&mut self, data: u8) {
-        if self.latch {
+        if !self.latch {
             self.x = data;
         } else {
             self.y = data;

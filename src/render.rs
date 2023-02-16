@@ -56,9 +56,9 @@ fn palette_start(row: usize, column: usize, attribute: u8) -> usize {
 ///
 /// Given a tile row and column, select the attribute space for the
 /// 4x4 tile region. Then select and return the palette table.
-fn background_palette(ppu: &Ppu, row: usize, column: usize) -> [u8; 4] {
+fn background_palette(ppu: &Ppu, nametable: &[u8], row: usize, column: usize) -> [u8; 4] {
     let index = (row / 4 * 8) + (column / 4);
-    let attr = ppu.vram[0x3c0 + index];
+    let attr = nametable[0x3c0 + index];
     let start = palette_start(row, column, attr);
     [
         ppu.palette[0],
@@ -75,6 +75,7 @@ fn background_palette(ppu: &Ppu, row: usize, column: usize) -> [u8; 4] {
 /// Then actually draw them onto the image.
 fn draw_background_tile(
     ppu: &Ppu,
+    nametable: &[u8],
     bank: u16,
     tile_num: u16,
     image: &mut Image,
@@ -85,7 +86,7 @@ fn draw_background_tile(
     // Select the tile bits from memory
     let mem_start = (bank + tile_num * 16) as usize;
     let tile = &ppu.chr_rom[mem_start..(mem_start + 16)];
-    let palette = background_palette(ppu, row as usize, column as usize);
+    let palette = background_palette(ppu, nametable, row as usize, column as usize);
 
     // Iterate through the 8x8 tile and draw the pixels
     for y in 0..8 {
@@ -98,23 +99,36 @@ fn draw_background_tile(
                 (true, false) => DEFAULT_PALETTE[palette[2] as usize],
                 (true, true) => DEFAULT_PALETTE[palette[3] as usize],
             };
-            image.set_pixel(
-                (8 - x) as u32 + (column * 8),
-                y as u32 + (row * 8),
-                color_u8!(r, g, b, 255),
-            )
+            let pixel_x = (8 - x) + (column * 8) as usize;
+            let pixel_y = y + (row * 8) as usize;
+            if pixel_x >= view.x1 && pixel_x < view.x2 && pixel_y >= view.y1 && pixel_y < view.y2 {
+                image.set_pixel(
+                    (view.offset_x + pixel_x as isize) as u32,
+                    (view.offset_y + pixel_y as isize) as u32,
+                    color_u8!(r, g, b, 255),
+                )
+            }
         }
     }
 }
 
 /// draws the background layer
-fn draw_background(ppu: &Ppu, image: &mut Image, view: &View) {
+fn draw_background(ppu: &Ppu, nametable: &[u8], image: &mut Image, view: &View) {
     let bank = ppu.ctrl_register.bg_bank_addr();
     for i in 0..0x03c0 {
-        let tile = ppu.vram[i] as u16;
+        let tile = nametable[i] as u16;
         let row = i / 32;
         let column = i % 32;
-        draw_background_tile(ppu, bank, tile, image, row as u32, column as u32, view);
+        draw_background_tile(
+            ppu,
+            nametable,
+            bank,
+            tile,
+            image,
+            row as u32,
+            column as u32,
+            view,
+        );
     }
 }
 
@@ -158,14 +172,14 @@ fn draw_sprite_tile(
                 (true, true) => DEFAULT_PALETTE[palette[3] as usize],
             };
             let pixel_x = if (attr & 0x40) == 0x40 {
-                tile_x + x
+                tile_x.wrapping_add(x) as u8
             } else {
-                tile_x + (7 - x)
+                tile_x.wrapping_add(7 - x)
             };
             let pixel_y = if (attr & 0x80) == 0x00 {
-                tile_y + y as u8
+                tile_y.wrapping_add(y as u8) as u8
             } else {
-                tile_y + (7 - y as u8)
+                tile_y.wrapping_add(7 - y as u8)
             };
             image.set_pixel(pixel_x as u32, pixel_y as u32, color_u8!(r, g, b, 255))
         }
@@ -192,6 +206,7 @@ pub fn draw(ppu: &Ppu, image: &mut Image) {
 
     draw_background(
         ppu,
+        main_background,
         image,
         &View::new(
             scroll_x as usize,
@@ -202,5 +217,22 @@ pub fn draw(ppu: &Ppu, image: &mut Image) {
             -(scroll_y as isize),
         ),
     );
+
+    if scroll_x > 0 {
+        draw_background(
+            ppu,
+            second_background,
+            image,
+            &View::new(0, 0, scroll_x as usize, 240, (255 - scroll_x) as isize, 0),
+        );
+    } else if scroll_y > 0 {
+        draw_background(
+            ppu,
+            second_background,
+            image,
+            &View::new(0, 0, 256, scroll_y as usize, 0, (240 - scroll_y) as isize),
+        );
+    }
+
     draw_sprites(ppu, image);
 }

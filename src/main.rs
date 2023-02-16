@@ -43,6 +43,8 @@ async fn main() {
     // setup graphics
     let mut image = Image::gen_image_color(320 as u16, 320 as u16, BLACK);
 
+    let mut counter: u32 = 0;
+
     // run cpu
     cpu.reset();
     clear_background(BLUE);
@@ -57,6 +59,7 @@ async fn main() {
 
         // get controller input from keyboard
         cpu.bus.read_keys();
+        counter = counter.wrapping_add(1);
 
         if render {
             render::draw(&cpu.bus.ppu, &mut image);
@@ -85,8 +88,8 @@ async fn main() {
             );
 
             draw_text(
-                format!("{}", get_fps()).trim(),
-                screen_width() - 30.0,
+                format!("{} {}", counter, get_fps()).trim(),
+                screen_width() - 150.0,
                 screen_height() - 20.0,
                 30.0,
                 GREEN,

@@ -60,23 +60,21 @@ impl Controller {
     /// read keys directly from macroquad and set the status bits
     pub fn read_keys(&mut self) {
         self.status
-            .set(ControllerButtons::A_BUTTON, is_key_pressed(KeyCode::A));
+            .set(ControllerButtons::A_BUTTON, is_key_down(KeyCode::A));
         self.status
-            .set(ControllerButtons::B_BUTTON, is_key_pressed(KeyCode::S));
-        self.status.set(
-            ControllerButtons::SELECT,
-            is_key_pressed(KeyCode::LeftShift),
-        );
+            .set(ControllerButtons::B_BUTTON, is_key_down(KeyCode::S));
         self.status
-            .set(ControllerButtons::START, is_key_pressed(KeyCode::Enter));
+            .set(ControllerButtons::SELECT, is_key_down(KeyCode::LeftShift));
         self.status
-            .set(ControllerButtons::UP, is_key_pressed(KeyCode::Up));
+            .set(ControllerButtons::START, is_key_down(KeyCode::Enter));
         self.status
-            .set(ControllerButtons::DOWN, is_key_pressed(KeyCode::Down));
+            .set(ControllerButtons::UP, is_key_down(KeyCode::Up));
         self.status
-            .set(ControllerButtons::LEFT, is_key_pressed(KeyCode::Left));
+            .set(ControllerButtons::DOWN, is_key_down(KeyCode::Down));
         self.status
-            .set(ControllerButtons::RIGHT, is_key_pressed(KeyCode::Right));
+            .set(ControllerButtons::LEFT, is_key_down(KeyCode::Left));
+        self.status
+            .set(ControllerButtons::RIGHT, is_key_down(KeyCode::Right));
     }
 }
 
