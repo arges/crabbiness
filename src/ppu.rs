@@ -47,8 +47,8 @@ impl Ppu {
         self.cycle += cycle as usize;
         debug!("ppu cycle {} scanline {}", self.cycle, self.scanline);
         if self.cycle >= 341 {
-            self.cycle -= 341;
             self.set_sprite0_hit();
+            self.cycle -= 341;
 
             self.scanline += 1;
             if self.scanline == 241 {
@@ -295,7 +295,13 @@ impl PpuCtrlRegister {
     }
 
     pub fn base_addr(&self) -> u16 {
-        0x2000 | (((self.bits() & 0b11) as u16) << 12)
+        match self.bits & 0b11 {
+            0 => 0x2000,
+            1 => 0x2400,
+            2 => 0x2800,
+            3 => 0x2c00,
+            _ => panic!("impossible"),
+        }
     }
 
     pub fn bg_bank_addr(&self) -> u16 {
